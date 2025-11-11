@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 from enum import Enum, auto
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class TransferStatus(Enum):
     PENDING = auto()
@@ -114,6 +115,31 @@ class StorageVirtualNode:
         self.active_transfers[file_id] = transfer
         return transfer
 
+     def _simulate_chunk_transfer(
+         self,
+         chunk: FileChunk,
+         source_node: str) -> bool:
+        """Simulate the transfer of a single chunk (with dynamic bandwidth)"""
+        available_bandwidth = min(
+            self.bandwidth - self.network_utilization,
+            self.connections.get(source_node, 0)
+        )
+
+        if available_bandwidth <= 0:
+            return False
+
+        # Simulate network variation (±30%)
+        available_bandwidth *= random.uniform(0.7, 1.0)
+
+        transfer_time = (chunk.size * 8) / available_bandwidth
+        time.sleep(transfer_time / 10)  # Accelerated simulation
+
+        chunk.status = TransferStatus.COMPLETED
+        chunk.stored_node = self.node_id
+        self.total_data_transferred += chunk.size
+
+        return True
+
     def process_chunk_transfer(
         self,
         file_id: str,
@@ -125,35 +151,16 @@ class StorageVirtualNode:
             return False
         
         transfer = self.active_transfers[file_id]
-        
-        try:
-            chunk = next(c for c in transfer.chunks if c.chunk_id == chunk_id)
-        except StopIteration:
+        chunk = next(c for c in transfer.chunks if c.chunk_id == chunk_id)
+        if not chunk or chunk.status == TransferStatus.COMPLETED:
             return False
-        
-        # Simulate network transfer time
-        chunk_size_bits = chunk.size * 8  # Convert bytes to bits
-        available_bandwidth = min(
-            self.bandwidth - self.network_utilization,
-            self.connections.get(source_node, 0)
-        )
-        
-        if available_bandwidth <= 0:
+
+        success = self._simulate_chunk_transfer(chunk, source_node)
+        if not success:
+            self.failed_transfers += 1
             return False
-        
-        # Calculate transfer time (in seconds)
-        transfer_time = chunk_size_bits / available_bandwidth
-        time.sleep(transfer_time)  # Simulate transfer delay
-        
-        # Update chunk status
-        chunk.status = TransferStatus.COMPLETED
-        chunk.stored_node = self.node_id
-        
-        # Update metrics
-        self.network_utilization += available_bandwidth * 0.8  # Simulate some fluctuation
-        self.total_data_transferred += chunk.size
-        
-        # Check if all chunks are completed
+
+        # Check completion
         if all(c.status == TransferStatus.COMPLETED for c in transfer.chunks):
             transfer.status = TransferStatus.COMPLETED
             transfer.completed_at = time.time()
@@ -161,64 +168,34 @@ class StorageVirtualNode:
             self.stored_files[file_id] = transfer
             del self.active_transfers[file_id]
             self.total_requests_processed += 1
-        
+
         return True
 
-    def retrieve_file(
-        self,
-        file_id: str,
-        destination_node: str
-    ) -> Optional[FileTransfer]:
-        """Initiate file retrieval to another node"""
-        if file_id not in self.stored_files:
-            return None
-        
-        file_transfer = self.stored_files[file_id]
-        
-        # Create a new transfer record for the retrieval
-        new_transfer = FileTransfer(
-            file_id=f"retr-{file_id}-{time.time()}",
-            file_name=file_transfer.file_name,
-            total_size=file_transfer.total_size,
-            chunks=[
-                FileChunk(
-                    chunk_id=c.chunk_id,
-                    size=c.size,
-                    checksum=c.checksum,
-                    stored_node=destination_node
-                )
-                for c in file_transfer.chunks
-            ]
-        )
-        
-        return new_transfer
+    def process_chunks_parallel(self, file_id: str, source_node: str, max_workers: int = 4) -> int:
+        """Process multiple chunks in parallel"""
+        if file_id not in self.active_transfers:
+            return 0
 
-    def get_storage_utilization(self) -> Dict[str, Union[int, float, List[str]]]:
-        """Get current storage utilization metrics"""
-        return {
-            "used_bytes": self.used_storage,  # int
-            "total_bytes": self.total_storage,  # int
-            "utilization_percent": (self.used_storage / self.total_storage) * 100,  # float
-            "files_stored": len(self.stored_files),  # int
-            "active_transfers": len(self.active_transfers)  # int
-            # Note: Removed list[str] since the current implementation doesn't return any lists
-        }
+        transfer = self.active_transfers[file_id]
+        pending_chunks = [c for c in transfer.chunks if c.status != TransferStatus.COMPLETED]
 
-    def get_network_utilization(self) -> Dict[str, Union[int, float, List[str]]]:
-        """Get current network utilization metrics"""
-        total_bandwidth_bps = self.bandwidth
-        return {
-            "current_utilization_bps": self.network_utilization,  # float
-            "max_bandwidth_bps": total_bandwidth_bps,  # int
-            "utilization_percent": (self.network_utilization / total_bandwidth_bps) * 100,  # float
-            "connections": list(self.connections.keys())  # List[str]
-        }
+        chunks_transferred = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._simulate_chunk_transfer, c, source_node): c
+                for c in pending_chunks[:max_workers]
+            }
+            for f in as_completed(futures):
+                if f.result():
+                    chunks_transferred += 1
 
-    def get_performance_metrics(self) -> Dict[str, int]:
-        """Get node performance metrics"""
+        return chunks_transferred
+
+    def get_storage_utilization(self):
         return {
-            "total_requests_processed": self.total_requests_processed,
-            "total_data_transferred_bytes": self.total_data_transferred,
-            "failed_transfers": self.failed_transfers,
-            "current_active_transfers": len(self.active_transfers)
+            "used_bytes": self.used_storage,
+            "total_bytes": self.total_storage,
+            "utilization_percent": (self.used_storage / self.total_storage) * 100,
+            "files_stored": len(self.stored_files),
+            "active_transfers": len(self.active_transfers)
         }
