@@ -1,5 +1,6 @@
 import time
 import math
+import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 from enum import Enum, auto
@@ -58,6 +59,32 @@ class StorageVirtualNode:
         
         # Network connections (node_id: bandwidth_available)
         self.connections: Dict[str, int] = {}
+        
+        # Dynamic system load (in %)
+        self.cpu_usage = random.uniform(5, 15)
+        self.memory_usage = random.uniform(10, 25)
+
+    # ----------------------------
+    # Node system load simulation
+    # ----------------------------
+    def _update_system_load(self, delta_cpu: float = 0.5, delta_mem: float = 0.3):
+        """Simulate CPU and memory load variation during transfers"""
+        # Fluctuation naturelle
+        self.cpu_usage += random.uniform(-delta_cpu, delta_cpu)
+        self.memory_usage += random.uniform(-delta_mem, delta_mem)
+
+        # Bornes réalistes
+        self.cpu_usage = max(5, min(100, self.cpu_usage))
+        self.memory_usage = max(10, min(100, self.memory_usage))
+
+    def _performance_penalty(self) -> float:
+        """Return a performance degradation factor based on CPU/memory load"""
+        penalty = 1.0
+        if self.cpu_usage > 80:
+            penalty *= 0.7  # ralentissement de 30%
+        if self.memory_usage > 75:
+            penalty *= 0.8  # ralentissement supplémentaire
+        return penalty
 
     def add_connection(self, node_id: str, bandwidth: int):
         """Add a network connection to another node"""
@@ -77,8 +104,8 @@ class StorageVirtualNode:
         """Break file into chunks for transfer"""
         chunk_size = self._calculate_chunk_size(file_size)
         num_chunks = math.ceil(file_size / chunk_size)
-        
         chunks = []
+        
         for i in range(num_chunks):
             # In a real system, we'd compute actual checksums
             fake_checksum = hashlib.md5(f"{file_id}-{i}".encode()).hexdigest()
