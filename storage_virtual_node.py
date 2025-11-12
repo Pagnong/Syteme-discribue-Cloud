@@ -146,7 +146,10 @@ class StorageVirtualNode:
          self,
          chunk: FileChunk,
          source_node: str) -> bool:
-        """Simulate the transfer of a single chunk (with dynamic bandwidth)"""
+        """Simulate the transfer of a single chunk (network and CPU/memory load)"""
+
+        self._update_system_load() # simulation dynamic load
+             
         available_bandwidth = min(
             self.bandwidth - self.network_utilization,
             self.connections.get(source_node, 0)
@@ -161,9 +164,18 @@ class StorageVirtualNode:
         transfer_time = (chunk.size * 8) / available_bandwidth
         time.sleep(transfer_time / 10)  # Accelerated simulation
 
+        # Update metrics
         chunk.status = TransferStatus.COMPLETED
         chunk.stored_node = self.node_id
         self.total_data_transferred += chunk.size
+
+        # Small CPU/memory increase per chunks
+        self.cpu_usage += 0.2
+        self.memory_usage += 0.1
+
+        # Keep within realistic limits
+        self.cpu_usage = min(100, self.cpu_usage)
+        self.memory_usage = min(100, self.memory_usage)
 
         return True
 
@@ -224,5 +236,7 @@ class StorageVirtualNode:
             "total_bytes": self.total_storage,
             "utilization_percent": (self.used_storage / self.total_storage) * 100,
             "files_stored": len(self.stored_files),
-            "active_transfers": len(self.active_transfers)
+            "active_transfers": len(self.active_transfers),
+            "cpu_usage_percent": round(self.cpu_usage, 2),
+            "memory_usage_percent": round(self.memory_usage, 2)
         }
