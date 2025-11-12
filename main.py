@@ -45,3 +45,5 @@ if transfer:
         stats = network.get_network_stats()
         print(f"Network utilization: {stats['bandwidth_utilization']:.2f}%")
         print(f"Storage utilization on node2: {node2.get_storage_utilization()['utilization_percent']:.2f}%")
+        stats = node2.get_storage_utilization()
+        print(f"CPU: {stats['cpu_usage_percent']}%, RAM: {stats['memory_usage_percent']}%")
