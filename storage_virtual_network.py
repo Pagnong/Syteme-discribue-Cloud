@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 import hashlib
 import time
 from storage_virtual_node import StorageVirtualNode, FileTransfer, TransferStatus
@@ -49,10 +49,11 @@ class StorageVirtualNetwork:
         source_node_id: str,
         target_node_id: str,
         file_id: str,
-        chunks_per_step: int = 1
+        chunks_per_step: int = 3
     ) -> Tuple[int, bool]:
         """Process a file transfer in chunks"""
-        if (source_node_id not in self.nodes or 
+        if (
+            source_node_id not in self.nodes or 
             target_node_id not in self.nodes or
             file_id not in self.transfer_operations[source_node_id]):
             return (0, False)
@@ -61,13 +62,12 @@ class StorageVirtualNetwork:
         target_node = self.nodes[target_node_id]
         transfer = self.transfer_operations[source_node_id][file_id]
         
-        chunks_transferred = 0
-        for chunk in transfer.chunks:
-            if chunk.status != TransferStatus.COMPLETED and chunks_transferred < chunks_per_step:
-                if target_node.process_chunk_transfer(file_id, chunk.chunk_id, source_node_id):
-                    chunks_transferred += 1
-                else:
-                    return (chunks_transferred, False)
+         # Parallel chunk processing
+        chunks_transferred = target_node.process_chunks_parallel(
+            file_id=file_id,
+            source_node=source_node_id,
+            max_workers=chunks_per_step
+        )
         
         # Check if transfer is complete
         if transfer.status == TransferStatus.COMPLETED:
@@ -87,9 +87,9 @@ class StorageVirtualNetwork:
             "total_nodes": len(self.nodes),
             "total_bandwidth_bps": total_bandwidth,
             "used_bandwidth_bps": used_bandwidth,
-            "bandwidth_utilization": (used_bandwidth / total_bandwidth) * 100,
+            "bandwidth_utilization": (used_bandwidth / total_bandwidth) * 100 if total_bandwidth else 0,
             "total_storage_bytes": total_storage,
             "used_storage_bytes": used_storage,
-            "storage_utilization": (used_storage / total_storage) * 100,
+            "storage_utilization": (used_storage / total_storage) * 100 if total_storage else 0,
             "active_transfers": sum(len(t) for t in self.transfer_operations.values())
         }
