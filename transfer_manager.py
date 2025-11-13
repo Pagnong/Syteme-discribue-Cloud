@@ -1,6 +1,6 @@
 import time
 from typing import Optional, Tuple
-from storage_virtual_node import StorageVirtualNode, FileTransfer, TransferStatus
+from node.storage_virtual_node import StorageVirtualNode, FileTransfer, TransferStatus
 
 class TransferManager:
     """
