@@ -2,7 +2,7 @@ import hashlib
 import time
 from collections import defaultdict
 from typing import Dict
-from storage_virtual_node import StorageVirtualNode
+from node.storage_virtual_node import StorageVirtualNode
 from core.transfer_manager import TransferManager
 from core.events import EventManager
 
