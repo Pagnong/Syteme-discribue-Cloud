@@ -11,7 +11,7 @@ network = StorageVirtualNetwork()
 # --- Gestion des événements réseau ---
 def on_transfer_started(data):
     print(f"\n Transfer started: {data['file_name']} ({data['file_size'] / 1024 / 1024:.2f} MB)")
-    print(f"   From {data['source']} ➜ {data['target']}")
+    print(f"   From {data['source']} -> {data['target']}")
 
 def on_transfer_completed(data):
     print(f" Transfer completed: {data['file_id']} — {data['total_size'] / 1024 / 1024:.2f} MB")
