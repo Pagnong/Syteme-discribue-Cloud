@@ -1,6 +1,7 @@
 import time
 from typing import Optional, Tuple
 from node.storage_virtual_node import StorageVirtualNode, FileTransfer, TransferStatus
+from core.persistence import PersistenceManager
 
 class TransferManager:
     """
@@ -10,6 +11,7 @@ class TransferManager:
 
     def __init__(self, network):
         self.network = network  # reference to StorageVirtualNetwork
+        self.persistence = PersistenceManager()  # for saving history
 
     def initiate_transfer(
         self,
@@ -65,7 +67,9 @@ class TransferManager:
             max_workers=chunks_per_step
         )
 
+        # --- If the transfer is completed ---
         if transfer.status == TransferStatus.COMPLETED:
+            self._save_transfer_to_history(source_node, target_node, transfer)
             self.network._emit("transfer_completed", {
                 "file_id": file_id,
                 "source": source_node_id,
@@ -76,3 +80,24 @@ class TransferManager:
             return (chunks_transferred, True)
 
         return (chunks_transferred, False)
+
+    # --------------------------------------------------
+    # Internal helper: save transfer info in JSON history
+    # --------------------------------------------------
+    def _save_transfer_to_history(self, source_node, target_node, transfer: FileTransfer):
+        """Save a completed transfer into persistent storage."""
+        duration = transfer.completed_at - transfer.created_at if transfer.completed_at else 0
+        node_stats = target_node.get_storage_utilization()
+
+        record = {
+            "file_id": transfer.file_id,
+            "file_name": transfer.file_name,
+            "source_node": source_node.node_id,
+            "target_node": target_node.node_id,
+            "file_size_MB": round(transfer.total_size / (1024 * 1024), 2),
+            "transfer_duration_sec": round(duration, 2),
+            "cpu_usage_end_percent": node_stats["cpu_usage_percent"],
+            "memory_usage_end_percent": node_stats["memory_usage_percent"]
+        }
+
+        self.persistence.save_transfer_record(record)
