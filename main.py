@@ -1,207 +1,255 @@
-# main.py
+import argparse
 import time
+import socket
 import threading
-import sys
-import json
-from network.storage_virtual_network import StorageVirtualNetwork
-from node.storage_virtual_node import StorageVirtualNode
-from core.persistence import PersistenceManager
+from storage_virtual_node import StorageVirtualNode
+from storage_virtual_network import StorageVirtualNetwork
 
-# ----------------------------
-# Configuration
-# ----------------------------
-GC_INTERVAL_SECONDS = 60      # intervalle du garbage collector par nœud
-MANUAL_INPUT_POLL = 0.5       # attente entre vérifications de l'input (s)
-
-
-# ----------------------------
-# Helper: background GC thread
-# ----------------------------
-def start_node_gc_thread(node: StorageVirtualNode, interval: int, stop_event: threading.Event):
-    """
-    Démarre un thread démon qui appelle node.cleanup(interval) en boucle.
-    Le thread s'arrêtera si stop_event est positionné.
-    """
-    def loop():
-        while not stop_event.is_set():
-            try:
-                removed = node.cleanup(max_age_seconds=interval * 5)  # e.g. retire les transferts > 5 * interval
-                if removed:
-                    print(f"[GC] Node {node.node_id} cleaned transfers: {removed}")
-            except Exception as e:
-                print(f"[GC] Node {node.node_id} cleanup error: {e}")
-            # attend avant prochain nettoyage (intervalles courts pour la démo)
-            for _ in range(interval):
-                if stop_event.is_set():
-                    break
-                time.sleep(1)
-    t = threading.Thread(target=loop, daemon=True, name=f"gc-{node.node_id}")
-    t.start()
-    return t
-
-
-# ----------------------------
-# 1) Initialisation réseau & persistence
-# ----------------------------
-network = StorageVirtualNetwork()
-persistence = PersistenceManager()  # utilisé si on veut lire l'historique
-
-# handlers événements
-def on_transfer_started(data):
-    print(f"\n🟢 Transfer started: {data['file_name']} ({data['file_size'] / 1024 / 1024:.2f} MB)")
-    print(f"   From {data['source']} ➜ {data['target']}")
-
-def on_transfer_completed(data):
-    print(f"✅ Transfer completed: {data['file_id']} — {data['total_size'] / 1024 / 1024:.2f} MB")
-    print(f"   Source: {data['source']} | Target: {data['target']}\n")
-
-def on_node_added(data):
-    print(f"🧩 Node added: {data['node_id']}")
-
-def on_nodes_connected(data):
-    print(f"🔗 Connected {data['node1']} ↔ {data['node2']} @ {data['bandwidth']} Mbps")
-
-network.events.on("transfer_started", on_transfer_started)
-network.events.on("transfer_completed", on_transfer_completed)
-network.events.on("node_added", on_node_added)
-network.events.on("nodes_connected", on_nodes_connected)
-
-
-# ----------------------------
-# 2) Création des nœuds
-# ----------------------------
-node1 = StorageVirtualNode("node1", cpu_capacity=4, memory_capacity=16, storage_capacity=500, bandwidth=1000)
-node2 = StorageVirtualNode("node2", cpu_capacity=8, memory_capacity=32, storage_capacity=1000, bandwidth=2000)
-network.add_node(node1)
-network.add_node(node2)
-
-# ----------------------------
-# 3) Connexion entre nœuds
-# ----------------------------
-network.connect_nodes("node1", "node2", bandwidth=1000)
-
-
-# ----------------------------
-# 4) Démarrer GC threads pour chaque nœud
-# ----------------------------
-stop_events = {}
-gc_threads = {}
-for node in [node1, node2]:
-    stop_event = threading.Event()
-    stop_events[node.node_id] = stop_event
-    t = start_node_gc_thread(node, GC_INTERVAL_SECONDS, stop_event)
-    gc_threads[node.node_id] = t
-    print(f"[MAIN] Started GC thread for {node.node_id}")
-
-
-# ----------------------------
-# 5) Lancer un transfert (exemple)
-# ----------------------------
-transfer = network.transfers.initiate_transfer(
-    source_node_id="node1",
-    target_node_id="node2",
-    file_name="large_dataset.zip",
-    file_size=100 * 1024 * 1024  # 100 MB
-)
-
-if not transfer:
-    print("❌ Failed to initiate transfer (insufficient resources or network error)")
-    # stop GC threads before exit
-    for e in stop_events.values():
-        e.set()
-    sys.exit(1)
-
-print(f"\n🚀 Transfer initiated: {transfer.file_name} (id: {transfer.file_id})\n")
-
-
-# ----------------------------
-# 6) Thread d'input utilisateur (commande interactive)
-#    - commandes supportées :
-#       cleanup   -> force cleanup pour chaque nœud maintenant
-#       history   -> affiche transfer_history.json
-#       status    -> montre stats réseau / node2
-#       quit/exit -> stoppe proprement
-# ----------------------------
-def user_input_thread(stop_event: threading.Event):
-    """
-    Poll console input sans bloquer la boucle principale. Fonctionne en thread.
-    """
-    print("[MAIN] Input commands: cleanup | history | status | quit")
-    while not stop_event.is_set():
+def find_available_port(start_port=6000, end_port=6999):
+    """Find an available port in the specified range with better collision handling"""
+    import random
+    ports = list(range(start_port, end_port + 1))
+    random.shuffle(ports)  # Randomize to reduce collision probability
+    
+    for port in ports:
         try:
-            # Utiliser input() bloque le thread; c'est acceptable car c'est dans un thread dédié.
-            cmd = input().strip().lower()
-            if cmd == "cleanup":
-                # Appel manuel du cleanup sur tous les nœuds
-                for node in [node1, node2]:
-                    removed = node.cleanup(max_age_seconds=60*60)  # supprime > 1h
-                    print(f"[MANUAL-CLEANUP] Node {node.node_id} removed transfers: {removed}")
-            elif cmd == "history":
-                hist = persistence.get_history()
-                print(f"[HISTORY] {len(hist)} records")
-                print(json.dumps(hist, indent=2))
-            elif cmd == "status":
-                stats = network.get_network_stats()
-                node2_stats = node2.get_storage_utilization()
-                print("[STATUS] Network:", stats)
-                print("[STATUS] Node2:", node2_stats)
-            elif cmd in ("quit", "exit"):
-                print("[MAIN] Exit requested by user.")
-                stop_event.set()
-            else:
-                if cmd:
-                    print("[MAIN] Unknown command:", cmd)
-        except EOFError:
-            # Ctrl-D on some terminals
-            stop_event.set()
-        except Exception as e:
-            print("[MAIN] Input thread error:", e)
-            stop_event.set()
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('localhost', port))
+                # Double-check port is actually available
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
+                    s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s2.bind(('localhost', port + 1000))  # Check heartbeat port too
+                return port
+        except OSError:
+            continue
+    raise RuntimeError("No available ports in range")
 
-
-input_stop = threading.Event()
-input_thread = threading.Thread(target=user_input_thread, args=(input_stop,), daemon=True, name="input-thread")
-input_thread.start()
-
-
-# ----------------------------
-# 7) Boucle principale de simulation
-# ----------------------------
-try:
+def interactive_node_interface(node):
+    """Interactive command interface for node operations"""
+    print(f"\n[Node {node.node_id}] Interactive mode started")
+    print("Available commands:")
+    print("  create <filename> <content>  - Create a new file with content locally")
+    print("  upload <filename>     - Upload file to cloud storage")
+    print("  download <filename>   - Download file from cloud storage")
+    print("  list                  - List local files")
+    print("  cloud_files           - List all files in cloud storage")
+    print("  status                - Show node status")
+    print("  network_status        - Show network status")
+    print("  metrics               - Show performance metrics")
+    print("  help                  - Show this help message")
+    print("  quit                  - Shutdown node")
+    print(f"[Node {node.node_id}]> ", end="", flush=True)
+    
     while True:
-        chunks_done, completed = network.transfers.process_transfer(
-            source_node_id="node1",
-            target_node_id="node2",
-            file_id=transfer.file_id,
-            chunks_per_step=3
+        try:
+            command = input().strip().split()
+            if not command:
+                print(f"[Node {node.node_id}]> ", end="", flush=True)
+                continue
+                
+            cmd = command[0].lower()
+            
+            if cmd == 'create' and len(command) > 2:
+                filename = command[1]
+                content = ' '.join(command[2:])  # Join remaining args as content
+                try:
+                    result = node.create_file(filename, content)
+                    if not result:
+                        print(f"[Node {node.node_id}] File creation failed: {filename}")
+                except Exception as e:
+                    print(f"[Node {node.node_id}] Create file error: {e}")
+            
+            elif cmd == 'upload' and len(command) > 1:
+                filename = command[1]
+                try:
+                    result = node.upload_file(filename)
+                    if result:
+                        print(f"[Node {node.node_id}] File uploaded to cloud storage with replication: {filename}")
+                    else:
+                        print(f"[Node {node.node_id}] Upload failed: {filename}")
+                except Exception as e:
+                    print(f"[Node {node.node_id}] Upload error: {e}")
+                    
+            elif cmd == 'download' and len(command) > 1:
+                filename = command[1]
+                try:
+                    result = node.download_file(file_name=filename)
+                    if result:
+                        print(f"[Node {node.node_id}] File downloaded from cloud storage: {filename}")
+                    else:
+                        print(f"[Node {node.node_id}] Download failed: {filename}")
+                except Exception as e:
+                    print(f"[Node {node.node_id}] Download error: {e}")
+                    
+            elif cmd == 'list':
+                files = node.list_local_files()
+                if files:
+                    print(f"[Node {node.node_id}] Local files:")
+                    for f in files:
+                        print(f"  - {f['file_name']} ({f['file_size']} bytes)")
+                else:
+                    print(f"[Node {node.node_id}] No local files")
+                    
+            elif cmd == 'cloud_files':
+                files = node.list_cloud_files()
+                if files:
+                    print(f"[Node {node.node_id}] Cloud storage files:")
+                    for f in files:
+                        print(f"  - {f['file_name']} ({f['file_size']} bytes) - Status: {f.get('status', 'available')} [Replicated across multiple nodes]")
+                else:
+                    print(f"[Node {node.node_id}] No files in cloud storage")
+                    
+            elif cmd == 'status':
+                storage_info = node.get_storage_utilization()
+                network_info = node.get_network_utilization()
+                print(f"[Node {node.node_id}] Status:")
+                print(f"  Storage: {storage_info['used_bytes']}/{storage_info['total_bytes']} bytes ({storage_info['utilization_percent']:.1f}%)")
+                print(f"  Network utilization: {network_info['utilization_percent']:.1f}%")
+                print(f"  Active transfers: {storage_info['active_transfers']}")
+                print(f"  Files stored: {storage_info['files_stored']}")
+                print(f"  Fault tolerance: ACTIVE (files replicated across nodes)")
+                
+            elif cmd == 'network_status':
+                print(f"[Node {node.node_id}] Network Status:")
+                print(f"  Connected to controller: {node.network_host}:{node.network_port}")
+                print(f"  Node service port: {getattr(node, 'service_port', 'N/A')}")
+                print(f"  IP: {node.network_info['ip_address']}")
+                print(f"  MAC: {node.network_info['mac_address']}")
+                print(f"  Replication enabled: YES")
+                
+            elif cmd == 'metrics':
+                metrics = node.get_performance_metrics()
+                print(f"[Node {node.node_id}] Performance Metrics:")
+                print(f"  Requests processed: {metrics['total_requests_processed']}")
+                print(f"  Data transferred: {metrics['total_data_transferred_bytes']} bytes")
+                print(f"  Failed transfers: {metrics['failed_transfers']}")
+                print(f"  Current active transfers: {metrics['current_active_transfers']}")
+                
+            elif cmd == 'help':
+                print("Available commands:")
+                print("  create <filename> <content>  - Create a new file with content locally")
+                print("  upload <filename>     - Upload file to cloud storage")
+                print("  download <filename>   - Download file from cloud storage")
+                print("  list                  - List local files")
+                print("  cloud_files           - List all files in cloud storage")
+                print("  status                - Show node status")
+                print("  network_status        - Show network status")
+                print("  metrics               - Show performance metrics")
+                print("  help                  - Show this help message")
+                print("  quit                  - Shutdown node")
+                
+            elif cmd == 'quit':
+                print(f"[Node {node.node_id}] Shutting down...")
+                node.shutdown()
+                break
+                
+            else:
+                print(f"[Node {node.node_id}] Unknown command: {' '.join(command)}")
+                print("Type 'help' for available commands")
+                
+            print(f"[Node {node.node_id}]> ", end="", flush=True)
+            
+        except KeyboardInterrupt:
+            print(f"\n[Node {node.node_id}] Shutting down...")
+            node.shutdown()
+            break
+        except EOFError:
+            print(f"\n[Node {node.node_id}] Shutting down...")
+            node.shutdown()
+            break
+        except Exception as e:
+            print(f"[Node {node.node_id}] Command error: {e}")
+            print(f"[Node {node.node_id}]> ", end="", flush=True)
+
+def run_node(node_id, cpu, memory, storage, bandwidth, network_host, network_port):
+    try:
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                node_port = find_available_port()
+                print(f"[Node {node_id}] Assigned unique port: {node_port}")
+                break
+            except RuntimeError:
+                if attempt == max_retries - 1:
+                    raise
+                print(f"[Node {node_id}] Port assignment failed, retrying... ({attempt + 1}/{max_retries})")
+                time.sleep(1)
+        
+        print(f"Starting node {node_id}...")
+        node = StorageVirtualNode(
+            node_id=node_id,
+            cpu_capacity=cpu,
+            memory_capacity=memory,
+            storage_capacity=storage,
+            bandwidth=bandwidth,
+            network_host=network_host,
+            network_port=network_port,
+            port=node_port
         )
+        
+        print(f"[Node {node_id}] Node started successfully on port {node_port}")
+        print(f"[Node {node_id}] Connected to network controller at {network_host}:{network_port}")
+        print(f"[Node {node_id}] Resources: CPU={cpu}, Memory={memory}GB, Storage={storage}GB, Bandwidth={bandwidth}Mbps")
+        print(f"[Node {node_id}] Cloud storage features enabled with automatic replication and fault tolerance")
+        
+        interactive_node_interface(node)
+        
+    except KeyboardInterrupt:
+        print(f"\n[Node {node_id}] Shutting down...")
+        if 'node' in locals():
+            node.shutdown()
+        print(f"[Node {node_id}] Node stopped")
+    except Exception as e:
+        print(f"[Node {node_id}] Startup failed: {e}")
 
-        # affichage périodique des stats
-        net_stats = network.get_network_stats()
-        node2_stats = node2.get_storage_utilization()
-        print(f"📦 Transferred chunks: {chunks_done} | Network utilization: {net_stats['bandwidth_utilization']:.2f}% | Node2 storage: {node2_stats['utilization_percent']:.2f}% | CPU {node2_stats['cpu_usage_percent']}%")
+def run_network(host, port):
+    try:
+        print("Starting network controller...")
+        network = StorageVirtualNetwork(host=host, port=port)
+        
+        print(f"[Network] Controller started on {host}:{port}")
+        print(f"Network controller running on {host}:{port}. Press Ctrl+C to stop.")
+        
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print(f"\n[Network] Shutting down network controller...")
+        network.shutdown()
+        print("[Network] Network controller stopped")
+    except Exception as e:
+        print(f"[Network] Startup failed: {e}")
 
-        if completed:
-            print("✅ Transfer completed successfully!")
-            break
-
-        # check if user requested exit via input thread
-        if input_stop.is_set():
-            print("[MAIN] Stopping simulation due to user request.")
-            break
-
-        time.sleep(0.5)
-
-except KeyboardInterrupt:
-    print("\n[MAIN] KeyboardInterrupt received. Shutting down...")
-
-finally:
-    # demande d'arrêt des background threads
-    input_stop.set()
-    for ev in stop_events.values():
-        ev.set()
-
-    # petite attente pour laisser threads se terminer proprement (daemon threads s'arrêtent à la sortie)
-    time.sleep(0.5)
-    print("[MAIN] Exiting.")
-    sys.exit(0)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Cloud Storage Simulation')
+    parser.add_argument('--node', action='store_true', help='Run as a node')
+    parser.add_argument('--network', action='store_true', help='Run as network controller')
+    parser.add_argument('--node-id', type=str, help='Node ID')
+    parser.add_argument('--cpu', type=int, default=4, help='CPU capacity')
+    parser.add_argument('--memory', type=int, default=16, help='Memory capacity (GB)')
+    parser.add_argument('--storage', type=int, default=500, help='Storage capacity (GB)')
+    parser.add_argument('--bandwidth', type=int, default=1000, help='Bandwidth (Mbps)')
+    parser.add_argument('--network-host', type=str, default='localhost', help='Network controller host')
+    parser.add_argument('--network-port', type=int, default=5000, help='Network controller port')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (for network)')
+    
+    args = parser.parse_args()
+    
+    if args.network:
+        run_network(args.host, args.network_port)
+    elif args.node and args.node_id:
+        run_node(
+            args.node_id, 
+            args.cpu, 
+            args.memory, 
+            args.storage, 
+            args.bandwidth,
+            args.network_host,
+            args.network_port
+        )
+    else:
+        print("Error: Please specify either --network or --node with --node-id")
+        print("\nUsage examples:")
+        print("  Network Controller: python main.py --network --host 0.0.0.0 --network-port 5000")
+        print("  Storage Node: python main.py --node --node-id node1 --cpu 4 --memory 32 --storage 500 --bandwidth 1000 --network-host localhost --network-port 5000")
+        print("  Create multiple nodes: Run the same command with different --node-id values in separate terminals")
