@@ -114,8 +114,8 @@ def interactive_node_interface(node):
                 print(f"[Node {node.node_id}] Network Status:")
                 print(f"  Connected to controller: {node.network_host}:{node.network_port}")
                 print(f"  Node service port: {getattr(node, 'service_port', 'N/A')}")
-                print(f"  IP: {node.network_info['ip_address']}")
-                print(f"  MAC: {node.network_info['mac_address']}")
+                print(f"  IP: {node.network_info.ip_address}")
+                print(f"  MAC: {node.network_info.mac_address}")
                 print(f"  Replication enabled: YES")
                 
             elif cmd == 'metrics':
