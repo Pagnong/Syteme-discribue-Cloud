@@ -9,6 +9,7 @@ import random
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from collections import defaultdict
+from network_identity import NetworkIdentity
 
 @dataclass
 class NetworkInfo:
@@ -30,6 +31,8 @@ class StorageVirtualNode:
         self.network_port = network_port
         self.port = port
         self.service_port = port
+        self.identity = NetworkIdentity()
+
         
         # Storage management
         self.used_storage = 0
@@ -39,8 +42,8 @@ class StorageVirtualNode:
         
         # Network info
         self.network_info = NetworkInfo(
-            ip_address=f"192.168.1.{random.randint(10, 254)}",
-            mac_address=f"02:00:00:{random.randint(0, 255):02x}:{random.randint(0, 255):02x}:{random.randint(0, 255):02x}",
+            ip_address=self.identity.ip_address,
+            mac_address=self.identity.mac_address,
             bandwidth=bandwidth
         )
         
