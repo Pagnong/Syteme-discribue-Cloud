@@ -210,3 +210,122 @@ Le projet est conçu comme un **simulateur éducatif** pour illustrer :
 - la réplication et la tolérance aux pannes,
 - la gestion d’un contrôleur centralisé,
 - la mesure simple de performances et de l’état du système.
+
+---
+
+## 9. Contexte pédagogique du projet
+
+Ce projet peut être utilisé comme **support de TP / mini-projet** dans un cours de :
+
+- systèmes distribués,
+- réseaux et communication inter-processus,
+- stockage distribué et tolérance aux pannes,
+- introduction au cloud computing.
+
+Il illustre concrètement les notions suivantes :
+
+- orchestration d’un ensemble de nœuds par un contrôleur central,
+- enregistrement des nœuds et surveillance de leur état (heartbeats),
+- réplication de données et détection de situations dégradées,
+- gestion simple des ressources (stockage, bande passante simulée).
+
+---
+
+## 10. Objectifs d’apprentissage possibles
+
+En travaillant sur ce projet, un étudiant peut :
+
+- **Comprendre** la différence entre stockage local et stockage distribué.
+- **Observer** comment un contrôleur de réseau peut suivre l’état de plusieurs nœuds.
+- **Analyser** le comportement du système en cas de panne de nœud (perte d’un réplique, re-réplication).
+- **Mettre en œuvre** des scénarios de transfert et de réplication de fichiers.
+- **Explorer** une base pour exposer le système via une API gRPC.
+
+Selon les consignes du TP/projet, l’enseignant peut demander :
+
+- d’ajouter de nouveaux types de métriques,
+- de modifier la stratégie de réplication,
+- d’améliorer la sélection des nœuds de stockage,
+- d’intégrer une vraie persistance disque ou une base de données,
+- d’exposer des fonctionnalités supplémentaires en gRPC.
+
+---
+
+## 11. Vue d’ensemble de l’architecture
+
+### 11.1. Composants principaux
+
+- **Contrôleur de réseau (`StorageVirtualNetwork` / `NetworkController`)**
+  - Accepte les enregistrements de nœuds (`REGISTER`).
+  - Suit leur état via des heartbeats (`HEARTBEAT`).
+  - Gère la réplication des fichiers et la file de demandes de réplication.
+  - Décide sur quels nœuds placer ou répliquer un fichier.
+
+- **Nœuds de stockage (`StorageVirtualNode`)**
+  - Hébergent des fichiers localement.
+  - Communiquent avec le contrôleur pour l’upload/download.
+  - Transfèrent des fichiers entre eux lors de la réplication.
+  - Maintiennent des métriques simples (nombre de requêtes, volume de données, etc.).
+
+- **Identité réseau (`NetworkIdentity`, `NetworkInfo`)**
+  - Génèrent une IP et une adresse MAC pour chaque nœud.
+  - Permettent d’afficher, via `network_status`, une vue réseau du nœud.
+
+### 11.2. Interactions principales
+
+1. Démarrage du contrôleur de réseau.
+2. Démarrage de plusieurs nœuds qui se **registrent** auprès du contrôleur.
+3. Création de fichiers sur un nœud, puis **upload** vers le cloud (décision du contrôleur sur les nœuds de stockage).
+4. Téléchargement (**download**) d’un fichier depuis n’importe quel nœud, en s’appuyant sur les répliques disponibles.
+5. Éventuelle panne de nœud et re-réplication pour revenir au niveau de réplication souhaité.
+
+---
+
+## 12. Scénarios de test suggérés
+
+Voici quelques scénarios possibles à décrire dans un rapport ou à tester en TP :
+
+1. **Upload et download de base**
+   - Lancer un contrôleur et deux nœuds.
+   - Créer un fichier sur `node1`, l’uploader, puis le télécharger depuis `node2`.
+
+2. **Tolérance aux pannes**
+   - Lancer plusieurs nœuds, uploader un fichier avec réplication.
+   - Arrêter un nœud contenant une réplique.
+   - Observer le comportement du contrôleur (fichier marqué dégradé, re-réplication, etc.).
+
+3. **Transferts parallèles**
+   - Utiliser `demo_parallel_transfer.py` pour lancer plusieurs uploads/downloads.
+   - Observer les métriques réseau et le temps de traitement.
+
+4. **Mesure de performances** (simple)
+   - Lancer une série de transferts et relever :
+     - le nombre total de requêtes,
+     - le volume de données transféré,
+     - le temps de réponse approximatif.
+
+---
+
+## 13. Limitations actuelles et pistes d’amélioration
+
+Ce projet reste une **simulation simplifiée**. Parmi les limitations possibles :
+
+- Pas de véritable persistance disque robuste (pas de système de fichiers distribué réel).
+- Pas de gestion fine des erreurs réseau, des partitions ou de la congestion.
+- Stratégies de placement/réplication simplifiées.
+- Sécurité, authentification et chiffrement absents.
+
+Quelques pistes d’amélioration pour un projet avancé :
+
+- Implémenter une **stratégie de placement intelligente** (prise en compte de la capacité restante, de la charge, de la localisation, etc.).
+- Ajouter une **interface web** ou une API REST/gRPC complète pour gérer le cluster.
+- Enregistrer des **logs structurés** et des métriques détaillées pour une analyse avec des outils externes.
+- Simuler des latences et des débits réseau différents entre nœuds (topologie de réseau plus réaliste).
+- Introduire des mécanismes de **consensus** ou de coordination plus avancés.
+
+---
+
+## 14. Auteurs et informations
+
+- **Nom** : PAGNONG FREDY
+- **Date** : Novembre 2025
