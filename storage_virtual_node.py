@@ -21,7 +21,7 @@ class NetworkInfo:
 class StorageVirtualNode:
     def __init__(self, node_id: str, cpu_capacity: int, memory_capacity: int, 
                  storage_capacity: int, bandwidth: int, network_host: str = 'localhost', 
-                 network_port: int = 5000, port: int = 6000):
+                 network_port: int = 5000, port: int = 6000, disk_size_mb: int = 250):
         self.node_id = node_id
         self.cpu_capacity = cpu_capacity
         self.memory_capacity = memory_capacity
@@ -39,6 +39,8 @@ class StorageVirtualNode:
         self.local_files = {}  # file_id -> file_data
         self.file_metadata = {}  # file_id -> metadata
         self.file_lock = threading.Lock()
+        self.disk_size_bytes = disk_size_mb * 1024 * 1024
+        self.disk_file_path = f"node_{self.node_id}_disk.img"
         
         # Network info
         self.network_info = NetworkInfo(
@@ -58,6 +60,8 @@ class StorageVirtualNode:
         # Server socket for handling requests
         self.server_socket = None
         self.running = False
+        
+        self._init_disk_file()
         
         # Start the node
         self._start_server()
@@ -175,9 +179,8 @@ class StorageVirtualNode:
                     
                     # Store the replicated file
                     with self.file_lock:
-                        self.local_files[file_id] = file_data
-                        self.file_metadata[file_id] = metadata
-                        self.used_storage += len(file_data)
+                        if self._store_file_to_disk(file_id, file_data, metadata):
+                            self.used_storage += len(file_data)
                     
                     return {'status': 'OK'}
                 else:
@@ -227,6 +230,59 @@ class StorageVirtualNode:
         except Exception as e:
             print(f"[Node {self.node_id}] Active notification error: {e}")
             
+    def _init_disk_file(self):
+        try:
+            if not os.path.exists(self.disk_file_path):
+                with open(self.disk_file_path, 'wb') as f:
+                    if self.disk_size_bytes > 0:
+                        f.seek(self.disk_size_bytes - 1)
+                        f.write(b"\0")
+            else:
+                current_size = os.path.getsize(self.disk_file_path)
+                if current_size != self.disk_size_bytes:
+                    with open(self.disk_file_path, 'wb') as f:
+                        if self.disk_size_bytes > 0:
+                            f.seek(self.disk_size_bytes - 1)
+                            f.write(b"\0")
+        except Exception as e:
+            print(f"[Node {self.node_id}] Disk initialization error: {e}")
+
+    def format_disk(self):
+        with self.file_lock:
+            try:
+                with open(self.disk_file_path, 'wb') as f:
+                    if self.disk_size_bytes > 0:
+                        f.seek(self.disk_size_bytes - 1)
+                        f.write(b"\0")
+                self.local_files.clear()
+                self.file_metadata.clear()
+                self.used_storage = 0
+                print(f"[Node {self.node_id}] Disk formatted ({self.disk_size_bytes} bytes)")
+                return True
+            except Exception as e:
+                print(f"[Node {self.node_id}] Disk format error: {e}")
+                return False
+
+    def resize_disk(self, new_size_mb: int) -> bool:
+        with self.file_lock:
+            try:
+                if new_size_mb <= 0:
+                    print(f"[Node {self.node_id}] Disk resize error: size must be positive")
+                    return False
+                self.disk_size_bytes = new_size_mb * 1024 * 1024
+                with open(self.disk_file_path, 'wb') as f:
+                    if self.disk_size_bytes > 0:
+                        f.seek(self.disk_size_bytes - 1)
+                        f.write(b"\0")
+                self.local_files.clear()
+                self.file_metadata.clear()
+                self.used_storage = 0
+                print(f"[Node {self.node_id}] Disk resized to {new_size_mb} MB")
+                return True
+            except Exception as e:
+                print(f"[Node {self.node_id}] Disk resize error: {e}")
+                return False
+
     def _start_heartbeat(self):
         """Start heartbeat thread"""
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
@@ -264,14 +320,9 @@ class StorageVirtualNode:
             }
             
             with self.file_lock:
-                if self.used_storage + len(file_data) > self.storage_capacity:
-                    print(f"[Node {self.node_id}] Insufficient storage space")
+                if not self._store_file_to_disk(file_id, file_data, metadata):
                     return False
                     
-                self.local_files[file_id] = file_data
-                self.file_metadata[file_id] = metadata
-                self.used_storage += len(file_data)
-                
             print(f"[Node {self.node_id}] Created file: {filename} ({len(file_data)} bytes)")
             return True
             
@@ -413,7 +464,6 @@ class StorageVirtualNode:
                             # Use proper storage method to save file and update registry
                             with self.file_lock:
                                 if self._store_file_to_disk(file_id, file_data, metadata):
-                                    self.used_storage += len(file_data)
                                     print(f"[Node {self.node_id}] File {file_name} downloaded successfully from {source_node} (attempt {attempt + 1})")
                                     return True
                                 else:
@@ -458,8 +508,16 @@ class StorageVirtualNode:
     def _store_file_to_disk(self, file_id: str, file_data: bytes, metadata: Dict) -> bool:
         """Store file data and metadata to local storage"""
         try:
+            file_size = len(file_data)
+            if self.used_storage + file_size > self.disk_size_bytes:
+                print(f"[Node {self.node_id}] Insufficient disk space")
+                return False
+            with open(self.disk_file_path, 'r+b') as f:
+                f.seek(self.used_storage)
+                f.write(file_data)
             self.local_files[file_id] = file_data
             self.file_metadata[file_id] = metadata
+            self.used_storage += file_size
             return True
         except Exception as e:
             print(f"[Node {self.node_id}] Storage error: {e}")
@@ -505,10 +563,10 @@ class StorageVirtualNode:
         """Get storage utilization information"""
         with self.file_lock:
             return {
-                'total_bytes': self.storage_capacity,
+                'total_bytes': self.disk_size_bytes,
                 'used_bytes': self.used_storage,
-                'available_bytes': self.storage_capacity - self.used_storage,
-                'utilization_percent': (self.used_storage / self.storage_capacity) * 100,
+                'available_bytes': self.disk_size_bytes - self.used_storage,
+                'utilization_percent': (self.used_storage / self.disk_size_bytes) * 100 if self.disk_size_bytes > 0 else 0,
                 'files_stored': len(self.local_files),
                 'active_transfers': self.metrics['current_active_transfers']
             }
