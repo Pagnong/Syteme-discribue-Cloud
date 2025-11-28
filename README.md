@@ -154,6 +154,34 @@ Commandes disponibles :
 
 ---
 
+### 5.1. Persistance du disque virtuel local
+
+Pour chaque nœud `nodeX`, le stockage local est géré via :
+
+- un **fichier disque virtuel** : `node_nodeX_disk.img`,
+- un **fichier de métadonnées JSON** : `node_nodeX_disk_meta.json`.
+
+À chaque création ou téléchargement de fichier sur un nœud :
+
+- les données sont écrites dans `node_nodeX_disk.img` à un offset donné,
+- les métadonnées du fichier (nom, taille, checksum, offset, etc.) sont enregistrées dans `node_nodeX_disk_meta.json`,
+- l’espace utilisé (`used_storage`) est mis à jour.
+
+Lorsqu’un nœud est arrêté puis relancé avec le **même `--node-id`** :
+
+- le nœud recharge les métadonnées depuis `node_nodeX_disk_meta.json`,
+- il relit les données depuis `node_nodeX_disk.img` à partir des offsets enregistrés,
+- les fichiers locaux redeviennent automatiquement accessibles (`list`, `upload`, etc.).
+
+La persistance est donc **conservée entre deux exécutions** tant que :
+
+- le disque n’a pas été formaté (`gestion_disk format`),
+- ou redimensionné (`gestion_disk resize ...`).
+
+Ces deux commandes réinitialisent l’image disque et le fichier de métadonnées : les fichiers locaux du nœud sont alors perdus pour les prochaines exécutions de ce nœud.
+
+---
+
 ## 6. Démos fournies
 
 ### 6.1. Tolérance aux pannes (`demo_fault_tolerance.py`)
