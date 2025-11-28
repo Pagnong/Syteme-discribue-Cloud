@@ -37,6 +37,7 @@ def interactive_node_interface(node):
     print("  status                - Show node status")
     print("  network_status        - Show network status")
     print("  metrics               - Show performance metrics")
+    print("  gestion_disk          - Manage local virtual disk (format/resize)")
     print("  help                  - Show this help message")
     print("  quit                  - Shutdown node")
     print(f"[Node {node.node_id}]> ", end="", flush=True)
@@ -105,6 +106,7 @@ def interactive_node_interface(node):
                 network_info = node.get_network_utilization()
                 print(f"[Node {node.node_id}] Status:")
                 print(f"  Storage: {storage_info['used_bytes']}/{storage_info['total_bytes']} bytes ({storage_info['utilization_percent']:.1f}%)")
+                print(f"  Local virtual disk: {storage_info['total_bytes'] // (1024 * 1024)} MB")
                 print(f"  Network utilization: {network_info['utilization_percent']:.1f}%")
                 print(f"  Active transfers: {storage_info['active_transfers']}")
                 print(f"  Files stored: {storage_info['files_stored']}")
@@ -126,6 +128,29 @@ def interactive_node_interface(node):
                 print(f"  Failed transfers: {metrics['failed_transfers']}")
                 print(f"  Current active transfers: {metrics['current_active_transfers']}")
                 
+            elif cmd == 'gestion_disk':
+                # gestion_disk format
+                # gestion_disk resize <size_mb>
+                if len(command) == 2 and command[1].lower() == 'format':
+                    try:
+                        result = node.format_disk()
+                        if not result:
+                            print(f"[Node {node.node_id}] Disk format failed")
+                    except Exception as e:
+                        print(f"[Node {node.node_id}] Disk format error: {e}")
+                elif len(command) == 3 and command[1].lower() == 'resize':
+                    try:
+                        new_size_mb = int(command[2])
+                        result = node.resize_disk(new_size_mb)
+                        if not result:
+                            print(f"[Node {node.node_id}] Disk resize failed")
+                    except ValueError:
+                        print(f"[Node {node.node_id}] Invalid size value: {command[2]}")
+                    except Exception as e:
+                        print(f"[Node {node.node_id}] Disk resize error: {e}")
+                else:
+                    print("Usage: gestion_disk format | gestion_disk resize <size_mb>")
+                    
             elif cmd == 'help':
                 print("Available commands:")
                 print("  create <filename> <content>  - Create a new file with content locally")
@@ -136,6 +161,7 @@ def interactive_node_interface(node):
                 print("  status                - Show node status")
                 print("  network_status        - Show network status")
                 print("  metrics               - Show performance metrics")
+                print("  gestion_disk          - Manage local virtual disk (format/resize)")
                 print("  help                  - Show this help message")
                 print("  quit                  - Shutdown node")
                 
@@ -162,7 +188,7 @@ def interactive_node_interface(node):
             print(f"[Node {node.node_id}] Command error: {e}")
             print(f"[Node {node.node_id}]> ", end="", flush=True)
 
-def run_node(node_id, cpu, memory, storage, bandwidth, network_host, network_port):
+def run_node(node_id, cpu, memory, storage, bandwidth, network_host, network_port, disk_mb):
     try:
         max_retries = 5
         for attempt in range(max_retries):
@@ -185,7 +211,8 @@ def run_node(node_id, cpu, memory, storage, bandwidth, network_host, network_por
             bandwidth=bandwidth,
             network_host=network_host,
             network_port=network_port,
-            port=node_port
+            port=node_port,
+            disk_size_mb=disk_mb
         )
         
         print(f"[Node {node_id}] Node started successfully on port {node_port}")
@@ -229,6 +256,7 @@ if __name__ == "__main__":
     parser.add_argument('--memory', type=int, default=16, help='Memory capacity (GB)')
     parser.add_argument('--storage', type=int, default=500, help='Storage capacity (GB)')
     parser.add_argument('--bandwidth', type=int, default=1000, help='Bandwidth (Mbps)')
+    parser.add_argument('--disk-mb', type=int, default=250, help='Local virtual disk size per node (MB)')
     parser.add_argument('--network-host', type=str, default='localhost', help='Network controller host')
     parser.add_argument('--network-port', type=int, default=5000, help='Network controller port')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Host to bind to (for network)')
@@ -245,7 +273,8 @@ if __name__ == "__main__":
             args.storage, 
             args.bandwidth,
             args.network_host,
-            args.network_port
+            args.network_port,
+            args.disk_mb
         )
     else:
         print("Error: Please specify either --network or --node with --node-id")
