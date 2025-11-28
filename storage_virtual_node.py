@@ -41,6 +41,7 @@ class StorageVirtualNode:
         self.file_lock = threading.Lock()
         self.disk_size_bytes = disk_size_mb * 1024 * 1024
         self.disk_file_path = f"node_{self.node_id}_disk.img"
+        self.metadata_file_path = f"node_{self.node_id}_disk_meta.json"
         
         # Network info
         self.network_info = NetworkInfo(
@@ -61,7 +62,10 @@ class StorageVirtualNode:
         self.server_socket = None
         self.running = False
         
+        # Initialize disk and load any existing metadata/files
+        self._load_disk_metadata()
         self._init_disk_file()
+        self._load_files_from_disk()
         
         # Start the node
         self._start_server()
@@ -179,8 +183,7 @@ class StorageVirtualNode:
                     
                     # Store the replicated file
                     with self.file_lock:
-                        if self._store_file_to_disk(file_id, file_data, metadata):
-                            self.used_storage += len(file_data)
+                        self._store_file_to_disk(file_id, file_data, metadata)
                     
                     return {'status': 'OK'}
                 else:
@@ -230,20 +233,78 @@ class StorageVirtualNode:
         except Exception as e:
             print(f"[Node {self.node_id}] Active notification error: {e}")
             
+    def _load_disk_metadata(self):
+        """Load disk metadata (used_storage, disk_size_bytes, file metadata) from JSON if present"""
+        try:
+            if os.path.exists(self.metadata_file_path):
+                with open(self.metadata_file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self.disk_size_bytes = data.get('disk_size_bytes', self.disk_size_bytes)
+                self.used_storage = data.get('used_storage', 0)
+                files_meta = data.get('files', {})
+                # Ensure we have a dict of metadata per file_id
+                if isinstance(files_meta, dict):
+                    self.file_metadata = files_meta
+                else:
+                    self.file_metadata = {}
+            else:
+                self.used_storage = 0
+                self.file_metadata = {}
+        except Exception as e:
+            print(f"[Node {self.node_id}] Disk metadata load error: {e}")
+            self.used_storage = 0
+            self.file_metadata = {}
+
+    def _save_disk_metadata(self):
+        """Persist disk metadata to JSON for future restarts"""
+        try:
+            data = {
+                'disk_size_bytes': self.disk_size_bytes,
+                'used_storage': self.used_storage,
+                'files': self.file_metadata
+            }
+            with open(self.metadata_file_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+        except Exception as e:
+            print(f"[Node {self.node_id}] Disk metadata save error: {e}")
+
+    def _load_files_from_disk(self):
+        """Reconstruct in-memory file cache from disk image using stored offsets"""
+        try:
+            if not os.path.exists(self.disk_file_path):
+                return
+            if not self.file_metadata:
+                return
+            with open(self.disk_file_path, 'rb') as f:
+                for file_id, meta in self.file_metadata.items():
+                    offset = meta.get('offset')
+                    size = meta.get('file_size')
+                    if offset is None or size is None:
+                        continue
+                    try:
+                        f.seek(offset)
+                        data = f.read(size)
+                        if len(data) == size:
+                            self.local_files[file_id] = data
+                    except Exception as inner_e:
+                        print(f"[Node {self.node_id}] Error loading file {file_id} from disk: {inner_e}")
+        except Exception as e:
+            print(f"[Node {self.node_id}] Error reloading files from disk: {e}")
+
     def _init_disk_file(self):
         try:
             if not os.path.exists(self.disk_file_path):
+                # Fresh disk creation
                 with open(self.disk_file_path, 'wb') as f:
                     if self.disk_size_bytes > 0:
                         f.seek(self.disk_size_bytes - 1)
                         f.write(b"\0")
             else:
+                # If we have metadata, trust disk_size_bytes from metadata and do not overwrite the disk
                 current_size = os.path.getsize(self.disk_file_path)
                 if current_size != self.disk_size_bytes:
-                    with open(self.disk_file_path, 'wb') as f:
-                        if self.disk_size_bytes > 0:
-                            f.seek(self.disk_size_bytes - 1)
-                            f.write(b"\0")
+                    # Keep existing size but warn
+                    print(f"[Node {self.node_id}] Warning: disk size on disk ({current_size} bytes) differs from configured size ({self.disk_size_bytes} bytes)")
         except Exception as e:
             print(f"[Node {self.node_id}] Disk initialization error: {e}")
 
@@ -257,6 +318,10 @@ class StorageVirtualNode:
                 self.local_files.clear()
                 self.file_metadata.clear()
                 self.used_storage = 0
+                # Reset metadata file
+                if os.path.exists(self.metadata_file_path):
+                    os.remove(self.metadata_file_path)
+                self._save_disk_metadata()
                 print(f"[Node {self.node_id}] Disk formatted ({self.disk_size_bytes} bytes)")
                 return True
             except Exception as e:
@@ -277,6 +342,10 @@ class StorageVirtualNode:
                 self.local_files.clear()
                 self.file_metadata.clear()
                 self.used_storage = 0
+                # Reset and save new metadata
+                if os.path.exists(self.metadata_file_path):
+                    os.remove(self.metadata_file_path)
+                self._save_disk_metadata()
                 print(f"[Node {self.node_id}] Disk resized to {new_size_mb} MB")
                 return True
             except Exception as e:
@@ -512,12 +581,18 @@ class StorageVirtualNode:
             if self.used_storage + file_size > self.disk_size_bytes:
                 print(f"[Node {self.node_id}] Insufficient disk space")
                 return False
+            # Determine file offset in the disk image
+            offset = self.used_storage
             with open(self.disk_file_path, 'r+b') as f:
-                f.seek(self.used_storage)
+                f.seek(offset)
                 f.write(file_data)
+            # Enrich metadata with offset information for persistence
+            metadata = dict(metadata)
+            metadata['offset'] = offset
             self.local_files[file_id] = file_data
             self.file_metadata[file_id] = metadata
             self.used_storage += file_size
+            self._save_disk_metadata()
             return True
         except Exception as e:
             print(f"[Node {self.node_id}] Storage error: {e}")
