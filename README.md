@@ -75,6 +75,7 @@ python main.py \
   --memory 16 \
   --storage 500 \
   --bandwidth 1000 \
+  --disk-mb 250 \
   --network-host localhost \
   --network-port 5000
 ```
@@ -87,6 +88,7 @@ Paramètres principaux :
 - `--memory` : mémoire (en Go, ex. `16`).
 - `--storage` : capacité de stockage (en Go, ex. `500`).
 - `--bandwidth` : bande passante (en Mbps).
+- `--disk-mb` : taille du **disque virtuel local** par nœud (en Mo, ex. `250`, `1024`, etc.).
 - `--network-host` / `--network-port` : adresse du contrôleur de réseau.
 
 À chaque démarrage :
@@ -122,6 +124,7 @@ Commandes disponibles :
 - `status`
   - Affiche l’état du nœud :
     - utilisation du stockage,
+    - **taille du disque virtuel local** (en Mo),
     - utilisation réseau simulée,
     - nombre de fichiers,
     - transferts actifs.
@@ -140,6 +143,10 @@ Commandes disponibles :
       ```
 - `metrics`
   - Affiche des métriques de performance (requêtes traitées, volume de données transféré, transferts en cours, etc.).
+- `gestion_disk format`
+  - Formate le **disque virtuel local** du nœud (fichier image), en réinitialisant l’espace disponible et les fichiers locaux enregistrés sur ce nœud.
+- `gestion_disk resize <taille_mb>`
+  - Redéfinit la taille (en Mo) du **disque virtuel local** du nœud et reformate le disque à cette nouvelle taille.
 - `help`
   - Rappelle la liste des commandes.
 - `quit`
