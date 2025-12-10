@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h3>Fichiers du nœud {{ node_id }}</h3>
+<p class="text-muted">Gestion des fichiers locaux et cloud pour le nœud <strong>{{ node_id }}</strong>.</p>
+
+<div class="row mb-4">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Créer un fichier local</div>
+      <div class="card-body">
+        <form id="form-create-local" class="row g-2">
+          <div class="col-12">
+            <label class="form-label">Nom du fichier</label>
+            <input type="text" name="filename" class="form-control" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Contenu</label>
+            <textarea name="content" class="form-control" rows="3" required></textarea>
+          </div>
+          <div class="col-12 mt-2">
+            <button class="btn btn-success" type="submit">Créer localement</button>
+          </div>
+        </form>
+        <div id="msg-create-local" class="mt-2 small"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Opérations cloud</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Uploader un fichier local vers le cloud</label>
+          <select id="select-upload" class="form-select mb-2"></select>
+          <button class="btn btn-primary" id="btn-upload">Uploader vers le cloud</button>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Télécharger un fichier depuis le cloud</label>
+          <select id="select-download" class="form-select mb-2"></select>
+          <button class="btn btn-secondary" id="btn-download">Télécharger sur le nœud</button>
+        </div>
+        <div id="msg-cloud" class="mt-2 small"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row mb-4">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Gestion du disque virtuel</div>
+      <div class="card-body">
+        <p class="small text-muted">Formatage : efface tous les fichiers locaux du nœud et réinitialise le disque.</p>
+        <button class="btn btn-danger mb-3" id="btn-format-disk">Formater le disque</button>
+
+        <hr>
+        <form id="form-resize-disk" class="row g-2">
+          <div class="col-8">
+            <label class="form-label">Nouvelle taille (MB)</label>
+            <input type="number" class="form-control" name="size_mb" min="1" required>
+          </div>
+          <div class="col-4 d-flex align-items-end">
+            <button class="btn btn-warning w-100" type="submit">Redimensionner</button>
+          </div>
+        </form>
+        <div id="msg-disk" class="mt-2 small"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-6 mb-4">
+    <div class="card h-100">
+      <div class="card-header">Fichiers locaux</div>
+      <div class="card-body">
+        <table class="table table-sm" id="table-local">
+          <thead>
+            <tr>
+              <th>Nom</th>
+              <th>Taille (bytes)</th>
+              <th>Créé</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6 mb-4">
+    <div class="card h-100">
+      <div class="card-header">Fichiers cloud (vue depuis ce nœud)</div>
+      <div class="card-body">
+        <table class="table table-sm" id="table-cloud">
+          <thead>
+            <tr>
+              <th>Nom</th>
+              <th>Taille</th>
+              <th>Statut</th>
+              <th>Réplication</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const NODE_ID = {{ node_id|tojson }};
+
+async function fetchJSON(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error('HTTP ' + res.status + ' ' + txt);
+  }
+  return await res.json();
+}
+
+async function refreshLocalFiles() {
+  const data = await fetchJSON(`/api/nodes/${NODE_ID}/files/local`);
+  const tbody = document.querySelector('#table-local tbody');
+  tbody.innerHTML = '';
+  const selectUpload = document.getElementById('select-upload');
+  selectUpload.innerHTML = '';
+  data.forEach(f => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${f.file_name}</td>
+      <td>${f.file_size}</td>
+      <td>${new Date(f.upload_time * 1000).toLocaleString()}</td>
+      <td><button class="btn btn-sm btn-outline-danger" data-delete-file="${f.file_name}">Supprimer</button></td>`;
+    tbody.appendChild(tr);
+    const opt = document.createElement('option');
+    opt.value = f.file_name;
+    opt.textContent = f.file_name;
+    selectUpload.appendChild(opt);
+  });
+}
+
+async function refreshCloudFiles() {
+  const data = await fetchJSON(`/api/nodes/${NODE_ID}/files/cloud`);
+  const tbody = document.querySelector('#table-cloud tbody');
+  tbody.innerHTML = '';
+  const selectDownload = document.getElementById('select-download');
+  selectDownload.innerHTML = '';
+  data.forEach(f => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${f.file_name}</td><td>${f.file_size}</td><td>${f.status}</td><td>${f.replicas ?? f.replication_health ?? ''}</td>`;
+    tbody.appendChild(tr);
+    const opt = document.createElement('option');
+    opt.value = f.file_name;
+    opt.textContent = f.file_name;
+    selectDownload.appendChild(opt);
+  });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('form-create-local').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const msg = document.getElementById('msg-create-local');
+    msg.textContent = '';
+    try {
+      await fetchJSON(`/api/nodes/${NODE_ID}/files/create`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      msg.textContent = 'Fichier créé localement.';
+      msg.className = 'mt-2 small text-success';
+      form.reset();
+      await refreshLocalFiles();
+    } catch (e) {
+      msg.textContent = 'Erreur: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  document.querySelector('#table-local tbody').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button[data-delete-file]');
+    if (!btn) return;
+    const filename = btn.getAttribute('data-delete-file');
+    if (!confirm('Supprimer le fichier ' + filename + ' ?')) return;
+    const msg = document.getElementById('msg-create-local');
+    msg.textContent = '';
+    try {
+      await fetchJSON(`/api/nodes/${NODE_ID}/files/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      msg.textContent = 'Fichier supprimé: ' + filename;
+      msg.className = 'mt-2 small text-success';
+      await refreshLocalFiles();
+    } catch (e) {
+      msg.textContent = 'Erreur suppression: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  document.getElementById('btn-format-disk').addEventListener('click', async () => {
+    if (!confirm('Formater le disque de ce nœud ? Tous les fichiers locaux seront perdus.')) return;
+    const msg = document.getElementById('msg-disk');
+    msg.textContent = '';
+    try {
+      await fetchJSON(`/api/nodes/${NODE_ID}/disk/format`, { method: 'POST' });
+      msg.textContent = 'Disque formaté avec succès.';
+      msg.className = 'mt-2 small text-success';
+      await refreshLocalFiles();
+    } catch (e) {
+      msg.textContent = 'Erreur formatage disque: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  document.getElementById('form-resize-disk').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const msg = document.getElementById('msg-disk');
+    msg.textContent = '';
+    try {
+      await fetchJSON(`/api/nodes/${NODE_ID}/disk/resize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      msg.textContent = 'Taille du disque modifiée. Le contenu local est réinitialisé.';
+      msg.className = 'mt-2 small text-success';
+      form.reset();
+      await refreshLocalFiles();
+    } catch (e) {
+      msg.textContent = 'Erreur redimensionnement disque: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  document.getElementById('btn-upload').addEventListener('click', async () => {
+    const filename = document.getElementById('select-upload').value;
+    const msg = document.getElementById('msg-cloud');
+    msg.textContent = '';
+    if (!filename) { msg.textContent = 'Choisissez un fichier local.'; return; }
+    try {
+      await fetchJSON(`/api/nodes/${NODE_ID}/files/upload`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename})
+      });
+      msg.textContent = 'Upload vers le cloud demandé.';
+      msg.className = 'mt-2 small text-success';
+      await refreshCloudFiles();
+    } catch (e) {
+      msg.textContent = 'Erreur upload: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  document.getElementById('btn-download').addEventListener('click', async () => {
+    const filename = document.getElementById('select-download').value;
+    const msg = document.getElementById('msg-cloud');
+    msg.textContent = '';
+    if (!filename) { msg.textContent = 'Choisissez un fichier cloud.'; return; }
+    try {
+      await fetchJSON(`/api/nodes/${NODE_ID}/files/download`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename})
+      });
+      msg.textContent = 'Téléchargement depuis le cloud terminé (voir fichiers locaux).';
+      msg.className = 'mt-2 small text-success';
+      await refreshLocalFiles();
+    } catch (e) {
+      msg.textContent = 'Erreur download: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  refreshLocalFiles();
+  refreshCloudFiles();
+});
+</script>
+{% endblock %}
