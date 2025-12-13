@@ -26,6 +26,7 @@ Le fichier `requirements.txt` contient notamment :
 - `grpcio`
 - `grpcio-tools`
 - `protobuf`
+ - `Flask`
 
 ---
 
@@ -42,6 +43,35 @@ Fichiers importants :
 - **`cloud_storage.proto` / `cloud_storage_pb2*.py`** : définition et code généré pour l’API gRPC.
 - **`demo_fault_tolerance.py`** : démonstration de la tolérance aux pannes (réplication des fichiers entre nœuds).
 - **`demo_parallel_transfer.py`** : démonstration de transferts parallèles.
+ - **`fault_tolerant_client.py`** : client de téléchargement tolérant aux pannes utilisé par la démo de tolérance aux pannes.
+ - **`parallel_transfer.py`** : gestionnaire de transferts parallèles et simulateur réseau utilisés par la démo de transferts parallèles.
+- **`web_app.py`** : application web Flask offrant une interface graphique pour visualiser l’état du réseau et des nœuds.
+- **`templates/`** : pages HTML (`index.html`, `network.html`, `node_files.html`, etc.) utilisées par l’interface web.
+
+### Interface web graphique (Flask)
+
+L’interface web permet de **piloter et visualiser la simulation** dans un navigateur web.
+
+Pour la lancer :
+
+```bash
+python web_app.py
+```
+
+Puis ouvrir dans un navigateur : `http://localhost:8000`.
+
+Fonctionnalités principales :
+
+- **Page d’accueil (`/`)** : accès général à la simulation.
+- **Vue réseau (`/network`)** :
+  - démarrer le contrôleur réseau via l’API (`/api/network/start`),
+  - voir l’état global du contrôleur et la liste des nœuds/fichiers (`/api/network/full-status`).
+- **Vue fichiers d’un nœud (`/nodes/<node_id>/files`)** :
+  - lister les fichiers locaux et dans le cloud pour un nœud,
+  - créer, uploader, télécharger, supprimer des fichiers,
+  - gérer le disque virtuel (format/resize) via les endpoints `/api/nodes/...`.
+
+Cette interface graphique repose sur l’API REST exposée par `web_app.py` (endpoints `/api/network/*` et `/api/nodes/*`).
 
 ---
 
@@ -186,7 +216,7 @@ Ces deux commandes réinitialisent l’image disque et le fichier de métadonné
 
 ### 6.1. Tolérance aux pannes (`demo_fault_tolerance.py`)
 
-Ce script montre comment le système continue à fonctionner même si certains nœuds tombent en panne, grâce à la **réplication** des fichiers.
+Ce script montre comment le système continue à fonctionner même si certains nœuds tombent en panne, grâce à la **réplication** des fichiers et à un **client de téléchargement tolérant aux pannes** (`FaultTolerantDownloadClient`).
 
 Exécution (exemple) :
 
@@ -194,11 +224,11 @@ Exécution (exemple) :
 python demo_fault_tolerance.py
 ```
 
-(Consultez le code du script pour voir le scénario exact : création de nœuds, upload de fichiers, arrêt de nœuds, etc.)
+(Consultez le code du script pour voir le scénario exact : création de nœuds, upload de fichiers, arrêt de nœuds, téléchargements tolérants aux pannes, affichage de l’état de réplication, etc. Les fichiers sont marqués comme **dégradés** si le nombre de réplicas actifs devient insuffisant, et la **santé de réplication** est affichée.)
 
 ### 6.2. Transfert parallèle (`demo_parallel_transfer.py`)
 
-Ce script montre comment plusieurs fichiers peuvent être transférés en parallèle dans le réseau de stockage.
+Ce script montre comment plusieurs fichiers peuvent être transférés en parallèle dans le réseau de stockage, avec un **simulateur de réseau** (perte de paquets, latence, jitter) et un **gestionnaire de transferts parallèles** (`ParallelTransferManager`).
 
 Exécution :
 
@@ -295,6 +325,7 @@ Selon les consignes du TP/projet, l’enseignant peut demander :
   - Suit leur état via des heartbeats (`HEARTBEAT`).
   - Gère la réplication des fichiers et la file de demandes de réplication.
   - Décide sur quels nœuds placer ou répliquer un fichier.
+  - Suit pour chaque fichier des informations de **santé de réplication** (réplicas actifs, statut disponible / dégradé, etc.).
 
 - **Nœuds de stockage (`StorageVirtualNode`)**
   - Hébergent des fichiers localement.
