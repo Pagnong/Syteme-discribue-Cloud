@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Dashboard</h3>
+  <div>
+    <a href="/network" class="btn btn-outline-info">Voir la vue réseau</a>
+  </div>
+</div>
+
+<div class="row mb-4">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Réseau</div>
+      <div class="card-body">
+        <p id="network-status">Statut du réseau : inconnu</p>
+        <button class="btn btn-primary me-2" id="btn-start-network">Démarrer le réseau</button>
+        <small class="text-muted d-block mt-2">Le contrôleur réseau est nécessaire avant de créer des nœuds.</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">Créer un nœud de stockage</div>
+      <div class="card-body">
+        <form id="form-create-node" class="row g-2">
+          <div class="col-12">
+            <label class="form-label">ID du nœud</label>
+            <input type="text" class="form-control" name="node_id" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label">CPU</label>
+            <input type="number" class="form-control" name="cpu" value="4" min="1">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Mémoire (GB)</label>
+            <input type="number" class="form-control" name="memory" value="16" min="1">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Stockage (GB)</label>
+            <input type="number" class="form-control" name="storage" value="500" min="1">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Bande passante (Mbps)</label>
+            <input type="number" class="form-control" name="bandwidth" value="1000" min="1">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Taille disque virtuel (MB)</label>
+            <input type="number" class="form-control" name="disk_mb" value="250" min="1">
+          </div>
+          <div class="col-12 mt-2">
+            <button class="btn btn-success" type="submit">Créer le nœud</button>
+          </div>
+        </form>
+        <div id="create-node-message" class="mt-2 small"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-7 mb-4">
+    <div class="card h-100">
+      <div class="card-header">Nœuds actifs</div>
+      <div class="card-body">
+        <table class="table table-sm" id="table-nodes">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>CPU</th>
+              <th>RAM</th>
+              <th>Stockage (GB)</th>
+              <th>Port</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-5 mb-4">
+    <div class="card h-100">
+      <div class="card-header">Détails du nœud sélectionné</div>
+      <div class="card-body" id="node-details">
+        <p class="text-muted mb-0">Sélectionnez un nœud dans la liste pour voir ses détails (stockage, réseau, métriques...).</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function fetchJSON(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    throw new Error('Erreur HTTP ' + res.status);
+  }
+  return await res.json();
+}
+
+async function refreshNetworkStatus() {
+  try {
+    const data = await fetchJSON('/api/network/status');
+    const el = document.getElementById('network-status');
+    if (!data.running) {
+      el.textContent = 'Statut du réseau : arrêté';
+    } else {
+      el.textContent = `Statut du réseau : en cours d\'exécution sur ${data.host}:${data.port} - Nœuds: ${data.nodes.join(', ') || 'aucun'}`;
+    }
+  } catch (e) {
+    document.getElementById('network-status').textContent = 'Statut du réseau : erreur de connexion';
+  }
+}
+
+async function startNetwork() {
+  try {
+    await fetchJSON('/api/network/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({})});
+    await refreshNetworkStatus();
+  } catch (e) {
+    alert('Impossible de démarrer le réseau : ' + e.message);
+  }
+}
+
+async function refreshNodes() {
+  try {
+    const nodes = await fetchJSON('/api/nodes');
+    const tbody = document.querySelector('#table-nodes tbody');
+    tbody.innerHTML = '';
+    nodes.forEach(n => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${n.node_id}</td>
+        <td>${n.cpu_capacity}</td>
+        <td>${n.memory_capacity}</td>
+        <td>${(n.storage_capacity_bytes / (1024*1024*1024)).toFixed(0)}</td>
+        <td>${n.service_port}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary me-1" data-node="${n.node_id}">Détails</button>
+          <a class="btn btn-sm btn-outline-success me-1" href="/nodes/${n.node_id}/files">Fichiers</a>
+          <button class="btn btn-sm btn-outline-danger" data-node-del="${n.node_id}">Stop</button>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function loadNodeDetails(nodeId) {
+  const container = document.getElementById('node-details');
+  container.textContent = 'Chargement...';
+  try {
+    const n = await fetchJSON(`/api/nodes/${nodeId}`);
+    container.innerHTML = `
+      <h5>Nœud ${n.node_id}</h5>
+      <p><strong>Ressources :</strong> CPU=${n.cpu_capacity}, RAM=${n.memory_capacity}GB, stockage virtuel=${(n.storage_capacity_bytes / (1024*1024*1024)).toFixed(0)}GB</p>
+      <p><strong>Réseau :</strong> contrôleur ${n.network_host}:${n.network_port}, port service=${n.service_port}, bande passante=${n.bandwidth} Mbps</p>
+      <p><strong>Stockage local :</strong> utilisés=${n.storage.used_bytes} / ${n.storage.total_bytes} bytes (${n.storage.utilization_percent.toFixed(1)}%)</p>
+      <p><strong>Métriques :</strong> requêtes=${n.metrics.total_requests_processed}, données transférées=${n.metrics.total_data_transferred_bytes} bytes, échecs=${n.metrics.failed_transfers}</p>
+      <p class="text-muted">Les fonctionnalités avancées (upload/download, fichiers cloud, etc.) peuvent être ajoutées sur d\'autres pages ou onglets.</p>
+    `;
+  } catch (e) {
+    container.textContent = 'Erreur lors du chargement des détails du nœud : ' + e.message;
+  }
+}
+
+async function shutdownNode(nodeId) {
+  if (!confirm('Arrêter le nœud ' + nodeId + ' ?')) return;
+  try {
+    await fetchJSON(`/api/nodes/${nodeId}/shutdown`, {method: 'POST'});
+    await refreshNodes();
+    await refreshNetworkStatus();
+    document.getElementById('node-details').textContent = 'Nœud arrêté.';
+  } catch (e) {
+    alert('Erreur lors de l\'arrêt du nœud : ' + e.message);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('btn-start-network').addEventListener('click', startNetwork);
+
+  document.getElementById('form-create-node').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const msg = document.getElementById('create-node-message');
+    msg.textContent = '';
+    try {
+      const res = await fetchJSON('/api/nodes', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      msg.textContent = 'Nœud créé avec succès (port ' + res.port + ')';
+      msg.className = 'mt-2 small text-success';
+      form.reset();
+      await refreshNodes();
+      await refreshNetworkStatus();
+    } catch (e) {
+      msg.textContent = 'Erreur: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  document.querySelector('#table-nodes tbody').addEventListener('click', (ev) => {
+    const btnDetails = ev.target.closest('button[data-node]');
+    const btnDel = ev.target.closest('button[data-node-del]');
+    if (btnDetails) {
+      loadNodeDetails(btnDetails.getAttribute('data-node'));
+    } else if (btnDel) {
+      shutdownNode(btnDel.getAttribute('data-node-del'));
+    }
+  });
+
+  refreshNetworkStatus();
+  refreshNodes();
+});
+</script>
+{% endblock %}
