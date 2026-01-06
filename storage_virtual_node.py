@@ -328,6 +328,126 @@ class StorageVirtualNode:
                 print(f"[Node {self.node_id}] Disk format error: {e}")
                 return False
 
+    def import_local_file(
+        self,
+        local_path: str,
+        cloud_file_name: Optional[str] = None,
+        upload_to_cloud: bool = True,
+        chunk_size: int = 1024 * 1024
+    ) -> Optional[str]:
+        """Import a local file into the node according to its capacity and show real-time progress."""
+        try:
+            if not os.path.exists(local_path):
+                print(f"[Node {self.node_id}] Import error: file not found: {local_path}")
+                return None
+
+            file_size = os.path.getsize(local_path)
+            file_name = cloud_file_name or os.path.basename(local_path)
+
+            with self.file_lock:
+                available_bytes = self.disk_size_bytes - self.used_storage
+
+            if file_size > available_bytes:
+                print(
+                    f"[Node {self.node_id}] Import error: insufficient disk space "
+                    f"({file_size} bytes needed, {available_bytes} bytes available)"
+                )
+                return None
+
+            file_id = hashlib.md5(f"{file_name}_{time.time()}".encode()).hexdigest()
+            md5 = hashlib.md5()
+            read_bytes = 0
+            last_print_time = 0.0
+
+            file_buffer = bytearray()
+            start_time = time.time()
+
+            with open(local_path, 'rb') as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    file_buffer.extend(chunk)
+                    md5.update(chunk)
+                    read_bytes += len(chunk)
+
+                    now = time.time()
+                    if now - last_print_time >= 0.1 or read_bytes == file_size:
+                        percent = (read_bytes / file_size) * 100 if file_size > 0 else 100
+                        elapsed = max(0.001, now - start_time)
+                        speed = read_bytes / elapsed
+                        print(
+                            f"\r[Node {self.node_id}] Importing {file_name}: "
+                            f"{percent:6.2f}% ({read_bytes}/{file_size} bytes) "
+                            f"{speed/1024/1024:6.2f} MB/s",
+                            end='',
+                            flush=True
+                        )
+                        last_print_time = now
+
+            print()  # end progress line
+
+            file_data = bytes(file_buffer)
+            checksum = md5.hexdigest()
+
+            metadata = {
+                'file_name': file_name,
+                'file_size': len(file_data),
+                'checksum': checksum,
+                'upload_time': time.time(),
+                'file_id': file_id,
+                'node_id': self.node_id,
+                'source_path': local_path
+            }
+
+            with self.file_lock:
+                if not self._store_file_to_disk(file_id, file_data, metadata):
+                    print(f"[Node {self.node_id}] Import error: failed to store file on disk")
+                    return None
+
+            if not upload_to_cloud:
+                print(f"[Node {self.node_id}] Imported locally: {file_name} ({file_size} bytes)")
+                return file_id
+
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(10)
+                    s.connect((self.network_host, self.network_port))
+                    s.sendall(pickle.dumps({
+                        'action': 'UPLOAD_FILE',
+                        'node_id': self.node_id,
+                        'file_id': file_id,
+                        'file_name': file_name,
+                        'file_size': file_size,
+                        'checksum': checksum
+                    }))
+                    response = pickle.loads(s.recv(4096))
+
+                if response.get('status') != 'OK':
+                    print(f"[Node {self.node_id}] Cloud register failed: {response.get('error', 'Unknown error')}")
+                    return None
+
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s2:
+                    s2.settimeout(5)
+                    s2.connect((self.network_host, self.network_port))
+                    s2.sendall(pickle.dumps({
+                        'action': 'UPLOAD_COMPLETE',
+                        'node_id': self.node_id,
+                        'file_id': file_id
+                    }))
+                    _ = s2.recv(1024)
+
+                print(f"[Node {self.node_id}] Import completed and registered in cloud: {file_name} (id={file_id})")
+                return file_id
+
+            except Exception as e:
+                print(f"[Node {self.node_id}] Cloud registration error: {e}")
+                return None
+
+        except Exception as e:
+            print(f"[Node {self.node_id}] Import error: {e}")
+            return None
+
     def resize_disk(self, new_size_mb: int) -> bool:
         with self.file_lock:
             try:
@@ -532,6 +652,23 @@ class StorageVirtualNode:
                             
                             # Use proper storage method to save file and update registry
                             with self.file_lock:
+                                # S'il existe déjà une copie locale avec le même nom, la supprimer pour réimporter proprement
+                                try:
+                                    existing_id = None
+                                    existing_size = 0
+                                    for fid, meta in list(self.file_metadata.items()):
+                                        if meta.get('file_name') == file_name:
+                                            existing_id = fid
+                                            existing_size = int(meta.get('file_size', 0))
+                                            break
+                                    if existing_id:
+                                        self.local_files.pop(existing_id, None)
+                                        self.file_metadata.pop(existing_id, None)
+                                        self.used_storage = max(0, self.used_storage - existing_size)
+                                        self._save_disk_metadata()
+                                except Exception:
+                                    pass
+
                                 if self._store_file_to_disk(file_id, file_data, metadata):
                                     print(f"[Node {self.node_id}] File {file_name} downloaded successfully from {source_node} (attempt {attempt + 1})")
                                     return True
@@ -610,6 +747,32 @@ class StorageVirtualNode:
                     'upload_time': metadata['upload_time']
                 })
             return files
+
+    def delete_file(self, filename: str) -> bool:
+        """Delete a local file by name"""
+        with self.file_lock:
+            try:
+                target_id = None
+                size = 0
+                for file_id, meta in self.file_metadata.items():
+                    if meta.get('file_name') == filename:
+                        target_id = file_id
+                        size = int(meta.get('file_size', 0))
+                        break
+                if not target_id:
+                    print(f"[Node {self.node_id}] Delete failed, file not found: {filename}")
+                    return False
+                # Remove from in-memory structures
+                self.local_files.pop(target_id, None)
+                self.file_metadata.pop(target_id, None)
+                # Adjust used storage (disk image space is not compacted but accounting is updated)
+                self.used_storage = max(0, self.used_storage - size)
+                self._save_disk_metadata()
+                print(f"[Node {self.node_id}] Deleted file: {filename}")
+                return True
+            except Exception as e:
+                print(f"[Node {self.node_id}] Delete file error: {e}")
+                return False
             
     def list_cloud_files(self) -> List[Dict]:
         """List all files in cloud storage"""
