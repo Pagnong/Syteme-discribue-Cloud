@@ -35,7 +35,18 @@
           <label class="form-label">Importer un fichier depuis votre appareil</label>
           <form id="form-import" class="row g-2" enctype="multipart/form-data">
             <div class="col-12">
-              <input type="file" name="file" class="form-control" required>
+              <input type="file" name="file" id="input-file" class="d-none" required>
+              <div id="dropzone" class="p-4 border rounded text-center" style="border-style: dashed; cursor: pointer; background: #fafafa;">
+                <div id="dz-content">
+                  <div class="mb-2" style="font-size: 40px; line-height: 1;">📁</div>
+                  <div class="fw-semibold">Glissez-déposez un fichier ici</div>
+                  <div class="text-muted small">ou cliquez pour parcourir</div>
+                </div>
+                <div id="dz-preview" class="d-none">
+                  <div class="fw-semibold" id="dz-filename"></div>
+                  <div class="text-muted small" id="dz-filesize"></div>
+                </div>
+              </div>
             </div>
             <div class="col-8">
               <input type="text" name="cloud_name" class="form-control" placeholder="Nom du fichier dans le cloud (optionnel)">
@@ -66,6 +77,11 @@
           <label class="form-label">Télécharger un fichier depuis le cloud</label>
           <select id="select-download" class="form-select mb-2"></select>
           <button class="btn btn-secondary" id="btn-download">Télécharger sur le nœud</button>
+          <div class="mt-2">
+            <div class="progress" style="height: 8px;">
+              <div id="progress-download" class="progress-bar" role="progressbar" style="width: 0%;"></div>
+            </div>
+          </div>
         </div>
         <div id="msg-cloud" class="mt-2 small"></div>
       </div>
@@ -192,6 +208,64 @@ async function refreshCloudFiles() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  // Drag & Drop dropzone behavior for import
+  const dz = document.getElementById('dropzone');
+  const inputFile = document.getElementById('input-file');
+  const dzContent = document.getElementById('dz-content');
+  const dzPreview = document.getElementById('dz-preview');
+  const dzName = document.getElementById('dz-filename');
+  const dzSize = document.getElementById('dz-filesize');
+
+  function formatSize(bytes) {
+    if (typeof bytes !== 'number') return '';
+    const units = ['B','KB','MB','GB','TB'];
+    let i = 0, n = bytes;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? Math.round(n) : n.toFixed(2)) + ' ' + units[i];
+  }
+
+  function showPreview(file) {
+    if (!file) {
+      dzPreview && dzPreview.classList.add('d-none');
+      dzContent && dzContent.classList.remove('d-none');
+      return;
+    }
+    if (dzName) dzName.textContent = file.name;
+    if (dzSize) dzSize.textContent = formatSize(file.size);
+    dzContent && dzContent.classList.add('d-none');
+    dzPreview && dzPreview.classList.remove('d-none');
+  }
+
+  function setFileOnInput(file) {
+    if (!inputFile || !file) return;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    inputFile.files = dt.files;
+    showPreview(file);
+  }
+
+  if (dz && inputFile) {
+    dz.addEventListener('click', () => inputFile.click());
+    inputFile.addEventListener('change', (e) => showPreview(e.target.files[0]));
+    dz.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dz.style.borderColor = '#0d6efd';
+      dz.style.background = '#f0f7ff';
+    });
+    dz.addEventListener('dragleave', () => {
+      dz.style.borderColor = '';
+      dz.style.background = '#fafafa';
+    });
+    dz.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dz.style.borderColor = '';
+      dz.style.background = '#fafafa';
+      const files = e.dataTransfer.files;
+      if (files && files.length) {
+        setFileOnInput(files[0]);
+      }
+    });
+  }
   document.getElementById('form-create-local').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const form = ev.target;
@@ -296,20 +370,41 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-download').addEventListener('click', async () => {
     const filename = document.getElementById('select-download').value;
     const msg = document.getElementById('msg-cloud');
+    const bar = document.getElementById('progress-download');
+    const btn = document.getElementById('btn-download');
     msg.textContent = '';
     if (!filename) { msg.textContent = 'Choisissez un fichier cloud.'; return; }
+
+    // Initialize indeterminate-like animation
+    let pct = 5;
+    bar.style.width = '0%';
+    bar.classList.remove('bg-success', 'bg-danger');
+    btn.disabled = true;
+    const timer = setInterval(() => {
+      pct = pct + Math.max(1, Math.floor((100 - pct) * 0.05));
+      if (pct > 95) pct = 95; // keep some headroom until completion
+      bar.style.width = pct + '%';
+    }, 200);
+
     try {
       await fetchJSON(`/api/nodes/${NODE_ID}/files/download`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({filename})
       });
+      clearInterval(timer);
+      bar.style.width = '100%';
+      bar.classList.add('bg-success');
       msg.textContent = 'Téléchargement depuis le cloud terminé (voir fichiers locaux).';
       msg.className = 'mt-2 small text-success';
       await refreshLocalFiles();
     } catch (e) {
+      clearInterval(timer);
+      bar.classList.add('bg-danger');
       msg.textContent = 'Erreur download: ' + e.message;
       msg.className = 'mt-2 small text-danger';
+    } finally {
+      btn.disabled = false;
     }
   });
 
