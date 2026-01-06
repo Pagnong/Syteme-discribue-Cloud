@@ -68,7 +68,7 @@ Fonctionnalités principales :
   - voir l’état global du contrôleur et la liste des nœuds/fichiers (`/api/network/full-status`).
 - **Vue fichiers d’un nœud (`/nodes/<node_id>/files`)** :
   - lister les fichiers locaux et dans le cloud pour un nœud,
-  - créer, uploader, télécharger, supprimer des fichiers,
+  - créer, importer depuis votre appareil (avec barre de progression), uploader, télécharger, supprimer des fichiers,
   - gérer le disque virtuel (format/resize) via les endpoints `/api/nodes/...`.
 
 Cette interface graphique repose sur l’API REST exposée par `web_app.py` (endpoints `/api/network/*` et `/api/nodes/*`).
@@ -126,6 +126,7 @@ Paramètres principaux :
 - Le nœud obtient un **port unique** pour son service.
 - Une **IP et une adresse MAC** sont générées automatiquement via `NetworkIdentity`.
 - Le nœud se **registre auprès du contrôleur** et envoie régulièrement des **heartbeats**.
+ - Dans le tableau des nœuds (dashboard), le bouton « Fichiers » ouvre la page du nœud dans un **nouvel onglet**.
 
 Le nœud démarre ensuite une **interface interactive** dans le terminal.
 
@@ -395,3 +396,27 @@ Quelques pistes d’amélioration pour un projet avancé :
 
 - **Nom** : PAGNONG FREDY
 - **Date** : Novembre 2025
+
+---
+
+## 15. Notes importantes (mises à jour récentes)
+
+- Import local par défaut non enregistré dans le cloud
+  - Lors de l’import d’un fichier depuis votre appareil (page Fichiers du nœud), la case « Enregistrer dans le cloud » est désormais décochée par défaut.
+  - Pour que le fichier soit disponible dans le cloud (et donc téléchargeable depuis d’autres nœuds), cochez la case ou utilisez ensuite « Uploader vers le cloud » sur le fichier local.
+
+- Téléchargement depuis le cloud: messages d’erreur explicites
+  - Si le fichier n’est pas présent dans le cloud: `error: file_not_in_cloud` avec un message explicite.
+  - Si l’espace local est insuffisant pour écrire le fichier: `error: insufficient_space` avec `required_bytes` et `available_bytes`.
+  - Conseil: augmentez la taille du disque virtuel du nœud (voir « Gestion du disque virtuel ») si vous voyez `insufficient_space`.
+
+- Ré-téléchargement après suppression locale
+  - Si vous supprimez un fichier localement mais qu’il existe encore dans le cloud, le bouton « Télécharger sur le nœud » re-télécharge proprement la dernière version depuis le cloud (l’ancienne entrée locale est nettoyée avant réécriture).
+
+- Affichages des tailles
+  - Les tailles affichées dans l’UI et la CLI ont été harmonisées en **MB** (Mo) pour plus de clarté.
+  - La **capacité locale déclarée (GB)** est distinguée de la **taille du disque virtuel (bytes/MB)** et toutes deux sont visibles dans l’UI/API.
+
+- Ouverture de la page nœud dans un nouvel onglet
+  - Sur le tableau des nœuds (dashboard), le bouton « Fichiers » ouvre la page du nœud dans un **nouvel onglet**. Le port du nœud est indiqué dans l’info-bulle.
+
