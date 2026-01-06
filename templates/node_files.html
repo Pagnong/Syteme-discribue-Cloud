@@ -31,6 +31,32 @@
     <div class="card">
       <div class="card-header">Opérations cloud</div>
       <div class="card-body">
+        <div class="mb-4">
+          <label class="form-label">Importer un fichier depuis votre appareil</label>
+          <form id="form-import" class="row g-2" enctype="multipart/form-data">
+            <div class="col-12">
+              <input type="file" name="file" class="form-control" required>
+            </div>
+            <div class="col-8">
+              <input type="text" name="cloud_name" class="form-control" placeholder="Nom du fichier dans le cloud (optionnel)">
+            </div>
+            <div class="col-4 d-flex align-items-center">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="register" id="chk-register">
+                <label class="form-check-label" for="chk-register">Enregistrer dans le cloud</label>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="progress" style="height: 8px;">
+                <div id="progress-import" class="progress-bar" role="progressbar" style="width: 0%;"></div>
+              </div>
+              <div id="msg-import" class="mt-2 small"></div>
+            </div>
+            <div class="col-12">
+              <button class="btn btn-outline-primary" type="submit">Importer</button>
+            </div>
+          </form>
+        </div>
         <div class="mb-3">
           <label class="form-label">Uploader un fichier local vers le cloud</label>
           <select id="select-upload" class="form-select mb-2"></select>
@@ -80,7 +106,7 @@
           <thead>
             <tr>
               <th>Nom</th>
-              <th>Taille (bytes)</th>
+              <th>Taille (MB)</th>
               <th>Créé</th>
               <th></th>
             </tr>
@@ -99,7 +125,7 @@
           <thead>
             <tr>
               <th>Nom</th>
-              <th>Taille</th>
+              <th>Taille (MB)</th>
               <th>Statut</th>
               <th>Réplication</th>
             </tr>
@@ -133,9 +159,10 @@ async function refreshLocalFiles() {
   selectUpload.innerHTML = '';
   data.forEach(f => {
     const tr = document.createElement('tr');
+    const sizeMB = (f.file_size / (1024*1024)).toFixed(2);
     tr.innerHTML = `
       <td>${f.file_name}</td>
-      <td>${f.file_size}</td>
+      <td>${sizeMB}</td>
       <td>${new Date(f.upload_time * 1000).toLocaleString()}</td>
       <td><button class="btn btn-sm btn-outline-danger" data-delete-file="${f.file_name}">Supprimer</button></td>`;
     tbody.appendChild(tr);
@@ -154,7 +181,8 @@ async function refreshCloudFiles() {
   selectDownload.innerHTML = '';
   data.forEach(f => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${f.file_name}</td><td>${f.file_size}</td><td>${f.status}</td><td>${f.replicas ?? f.replication_health ?? ''}</td>`;
+    const sizeMB = (f.file_size / (1024*1024)).toFixed(2);
+    tr.innerHTML = `<td>${f.file_name}</td><td>${sizeMB}</td><td>${f.status}</td><td>${f.replicas ?? f.replication_health ?? ''}</td>`;
     tbody.appendChild(tr);
     const opt = document.createElement('option');
     opt.value = f.file_name;
@@ -281,6 +309,64 @@ window.addEventListener('DOMContentLoaded', () => {
       await refreshLocalFiles();
     } catch (e) {
       msg.textContent = 'Erreur download: ' + e.message;
+      msg.className = 'mt-2 small text-danger';
+    }
+  });
+
+  // Import local file with progress
+  document.getElementById('form-import').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    const msg = document.getElementById('msg-import');
+    const bar = document.getElementById('progress-import');
+    msg.textContent = '';
+    bar.style.width = '0%';
+    bar.classList.remove('bg-success', 'bg-danger');
+
+    const fileInput = form.querySelector('input[type="file"][name="file"]');
+    if (!fileInput.files || fileInput.files.length === 0) {
+      msg.textContent = 'Choisissez un fichier.';
+      msg.className = 'mt-2 small text-danger';
+      return;
+    }
+
+    const data = new FormData();
+    data.append('file', fileInput.files[0]);
+    const cloudName = form.querySelector('input[name="cloud_name"]').value;
+    if (cloudName) data.append('cloud_name', cloudName);
+    const register = form.querySelector('input[name="register"]').checked ? 'y' : 'n';
+    data.append('register', register);
+
+    try {
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `/api/nodes/${NODE_ID}/files/import`);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            bar.style.width = pct + '%';
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            bar.style.width = '100%';
+            bar.classList.add('bg-success');
+            resolve();
+          } else {
+            reject(new Error('HTTP ' + xhr.status + ' ' + xhr.responseText));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Erreur réseau'));
+        xhr.send(data);
+      });
+      msg.textContent = 'Import terminé.';
+      msg.className = 'mt-2 small text-success';
+      form.reset();
+      await refreshLocalFiles();
+      await refreshCloudFiles();
+    } catch (e) {
+      bar.classList.add('bg-danger');
+      msg.textContent = 'Erreur import: ' + e.message;
       msg.className = 'mt-2 small text-danger';
     }
   });
