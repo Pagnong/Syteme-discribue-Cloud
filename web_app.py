@@ -1,4 +1,6 @@
 from flask import Flask, jsonify, request, render_template
+import tempfile
+import os
 from threading import Lock
 
 from storage_virtual_node import StorageVirtualNode
@@ -90,7 +92,10 @@ def list_nodes():
             "node_id": node_id,
             "cpu_capacity": node.cpu_capacity,
             "memory_capacity": node.memory_capacity,
-            "storage_capacity_bytes": node.storage_capacity,
+            # Expose virtual storage as the local virtual disk size (total_bytes)
+            "storage_capacity_bytes": storage_info.get("total_bytes", 0),
+            # Expose declared local capacity (as entered) in GB for details page
+            "declared_local_capacity_gb": getattr(node, 'declared_local_capacity_gb', None),
             "bandwidth": node.bandwidth,
             "network_host": node.network_host,
             "network_port": node.network_port,
@@ -138,6 +143,12 @@ def create_node():
         disk_size_mb=disk_mb,
     )
 
+    # Sauvegarder la capacité locale déclarée (en GB) séparément pour l'affichage
+    try:
+        setattr(node, 'declared_local_capacity_gb', storage)
+    except Exception:
+        pass
+
     nodes[node_id] = node
 
     return jsonify({
@@ -161,7 +172,10 @@ def get_node_details(node_id):
         "node_id": node.node_id,
         "cpu_capacity": node.cpu_capacity,
         "memory_capacity": node.memory_capacity,
-        "storage_capacity_bytes": node.storage_capacity,
+        # Virtual storage capacity = local disk size (total_bytes)
+        "storage_capacity_bytes": storage_info.get("total_bytes", 0),
+        # Declared local capacity entered by user (GB)
+        "declared_local_capacity_gb": getattr(node, 'declared_local_capacity_gb', None),
         "bandwidth": node.bandwidth,
         "network_host": node.network_host,
         "network_port": node.network_port,
@@ -224,8 +238,41 @@ def api_node_download_file(node_id):
     filename = data.get("filename")
     if not filename:
         return jsonify({"error": "filename_required"}), 400
+    # Vérifier que le fichier est présent dans le cloud (réseau) avant de lancer le download
+    try:
+        cloud_files = node.list_cloud_files()
+    except Exception:
+        cloud_files = []
+    if not any(f.get('file_name') == filename for f in cloud_files):
+        return jsonify({
+            "error": "file_not_in_cloud",
+            "message": "Le fichier n'est pas disponible dans le cloud. Lors de l'import, cochez 'Enregistrer dans le cloud', puis rafraîchissez la liste des fichiers cloud."
+        }), 400
+
+    # Vérifier l'espace disque local disponible avant le téléchargement
+    try:
+        file_entry = next((f for f in cloud_files if f.get('file_name') == filename), None)
+        target_size = int(file_entry.get('file_size', 0)) if file_entry else 0
+    except Exception:
+        target_size = 0
+    storage_info = node.get_storage_utilization()
+    available = int(storage_info.get('available_bytes', 0))
+    if target_size and target_size > available:
+        return jsonify({
+            "error": "insufficient_space",
+            "message": f"Espace disque local insuffisant pour télécharger '{filename}'. Requis: {target_size} bytes, disponible: {available} bytes. Augmentez la taille du disque virtuel ou libérez de l'espace.",
+            "required_bytes": target_size,
+            "available_bytes": available
+        }), 400
+
     ok = node.download_file(file_name=filename)
-    return jsonify({"status": "ok" if ok else "failed"}), (200 if ok else 500)
+    if ok:
+        return jsonify({"status": "ok"}), 200
+    else:
+        return jsonify({
+            "status": "failed",
+            "message": "Téléchargement impossible depuis le cloud. Vérifiez l'état du contrôleur réseau et des nœuds réplicas."
+        }), 500
 
 
 @app.route("/api/nodes/<node_id>/files/delete", methods=["POST"])
@@ -240,6 +287,49 @@ def api_node_delete_file(node_id):
     ok = node.delete_file(filename)
     return jsonify({"status": "ok" if ok else "failed"}), (200 if ok else 500)
 
+
+@app.route("/api/nodes/<node_id>/files/import", methods=["POST"])
+def api_node_import_file(node_id):
+    node = nodes.get(node_id)
+    if node is None:
+        return jsonify({"error": "node_not_found"}), 404
+    # Expect multipart/form-data with 'file', optional 'cloud_name', optional 'register' (y/n)
+    if 'file' not in request.files:
+        return jsonify({"error": "file_required"}), 400
+    f = request.files['file']
+    if f.filename == '':
+        return jsonify({"error": "empty_filename"}), 400
+
+    cloud_name = request.form.get('cloud_name') or None
+    # Désactiver l'enregistrement cloud par défaut: n'enregistrer que si 'register' == 'y'
+    register_flag = (request.form.get('register', 'n').lower() == 'y')
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
+            f.save(tmp)
+
+        file_id = node.import_local_file(
+            local_path=tmp_path,
+            cloud_file_name=cloud_name or f.filename,
+            upload_to_cloud=register_flag
+        )
+        if not file_id:
+            return jsonify({"status": "failed"}), 500
+        return jsonify({
+            "status": "ok",
+            "file_id": file_id,
+            "registered": register_flag
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 @app.route("/api/nodes/<node_id>/disk/format", methods=["POST"])
 def api_node_disk_format(node_id):
