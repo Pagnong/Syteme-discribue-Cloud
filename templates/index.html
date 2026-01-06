@@ -31,23 +31,23 @@
           </div>
           <div class="col-6">
             <label class="form-label">CPU</label>
-            <input type="number" class="form-control" name="cpu" value="4" min="1">
+            <input type="number" class="form-control" name="cpu" value="1" min="1">
           </div>
           <div class="col-6">
             <label class="form-label">Mémoire (GB)</label>
-            <input type="number" class="form-control" name="memory" value="16" min="1">
+            <input type="number" class="form-control" name="memory" value="1" min="1">
           </div>
           <div class="col-6">
             <label class="form-label">Stockage (GB)</label>
-            <input type="number" class="form-control" name="storage" value="500" min="1">
+            <input type="number" class="form-control" name="storage" value="1" min="1">
           </div>
           <div class="col-6">
             <label class="form-label">Bande passante (Mbps)</label>
-            <input type="number" class="form-control" name="bandwidth" value="1000" min="1">
+            <input type="number" class="form-control" name="bandwidth" value="1" min="1">
           </div>
           <div class="col-12">
             <label class="form-label">Taille disque virtuel (MB)</label>
-            <input type="number" class="form-control" name="disk_mb" value="250" min="1">
+            <input type="number" class="form-control" name="disk_mb" value="1" min="1">
           </div>
           <div class="col-12 mt-2">
             <button class="btn btn-success" type="submit">Créer le nœud</button>
@@ -70,7 +70,7 @@
               <th>ID</th>
               <th>CPU</th>
               <th>RAM</th>
-              <th>Stockage (GB)</th>
+              <th>Stockage local déclaré (GB)</th>
               <th>Port</th>
               <th></th>
             </tr>
@@ -137,11 +137,11 @@ async function refreshNodes() {
         <td>${n.node_id}</td>
         <td>${n.cpu_capacity}</td>
         <td>${n.memory_capacity}</td>
-        <td>${(n.storage_capacity_bytes / (1024*1024*1024)).toFixed(0)}</td>
+        <td>${(n.declared_local_capacity_gb ?? '—')}</td>
         <td>${n.service_port}</td>
         <td>
           <button class="btn btn-sm btn-outline-primary me-1" data-node="${n.node_id}">Détails</button>
-          <a class="btn btn-sm btn-outline-success me-1" href="/nodes/${n.node_id}/files">Fichiers</a>
+          <a class="btn btn-sm btn-outline-success me-1" href="/nodes/${n.node_id}/files" target="_blank" title="Ouvrir les fichiers du nœud sur le port ${n.service_port}">Fichiers</a>
           <button class="btn btn-sm btn-outline-danger" data-node-del="${n.node_id}">Stop</button>
         </td>`;
       tbody.appendChild(tr);
@@ -160,7 +160,8 @@ async function loadNodeDetails(nodeId) {
       <h5>Nœud ${n.node_id}</h5>
       <p><strong>Ressources :</strong> CPU=${n.cpu_capacity}, RAM=${n.memory_capacity}GB, stockage virtuel=${(n.storage_capacity_bytes / (1024*1024*1024)).toFixed(0)}GB</p>
       <p><strong>Réseau :</strong> contrôleur ${n.network_host}:${n.network_port}, port service=${n.service_port}, bande passante=${n.bandwidth} Mbps</p>
-      <p><strong>Stockage local :</strong> utilisés=${n.storage.used_bytes} / ${n.storage.total_bytes} bytes (${n.storage.utilization_percent.toFixed(1)}%)</p>
+      <p><strong>Capacité locale déclarée :</strong> ${n.declared_local_capacity_gb ?? '—'} GB</p>
+      <p><strong>Stockage local :</strong> utilisés=${(n.storage.used_bytes / (1024*1024)).toFixed(2)} / ${(n.storage.total_bytes / (1024*1024)).toFixed(2)} MB (${n.storage.utilization_percent.toFixed(1)}%)</p>
       <p><strong>Métriques :</strong> requêtes=${n.metrics.total_requests_processed}, données transférées=${n.metrics.total_data_transferred_bytes} bytes, échecs=${n.metrics.failed_transfers}</p>
       <p class="text-muted">Les fonctionnalités avancées (upload/download, fichiers cloud, etc.) peuvent être ajoutées sur d\'autres pages ou onglets.</p>
     `;
