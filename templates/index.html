@@ -141,7 +141,7 @@ async function refreshNodes() {
         <td>${n.service_port}</td>
         <td>
           <button class="btn btn-sm btn-outline-primary me-1" data-node="${n.node_id}">Détails</button>
-          <a class="btn btn-sm btn-outline-success me-1" href="/nodes/${n.node_id}/files" target="_blank" title="Ouvrir les fichiers du nœud sur le port ${n.service_port}">Fichiers</a>
+          <a class="btn btn-sm btn-outline-success me-1" href="/nodes/${n.node_id}/files" data-open-files="${n.node_id}" title="Ouvrir les fichiers du nœud sur le port ${n.service_port}">Fichiers</a>
           <button class="btn btn-sm btn-outline-danger" data-node-del="${n.node_id}">Stop</button>
         </td>`;
       tbody.appendChild(tr);
@@ -209,6 +209,15 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   document.querySelector('#table-nodes tbody').addEventListener('click', (ev) => {
+    const linkOpen = ev.target.closest('a[data-open-files]');
+    if (linkOpen) {
+      ev.preventDefault();
+      const nodeId = linkOpen.getAttribute('data-open-files');
+      const url = linkOpen.getAttribute('href');
+      // Réutiliser/mettre au premier plan un onglet unique par nœud
+      window.open(url, `node_files_${nodeId}`);
+      return;
+    }
     const btnDetails = ev.target.closest('button[data-node]');
     const btnDel = ev.target.closest('button[data-node-del]');
     if (btnDetails) {
