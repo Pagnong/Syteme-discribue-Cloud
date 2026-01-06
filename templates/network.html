@@ -51,7 +51,7 @@
           <thead>
             <tr>
               <th>Nom</th>
-              <th>Taille</th>
+              <th>Taille (MB)</th>
               <th>Statut</th>
               <th>Primaires</th>
               <th>Réplica</th>
@@ -96,7 +96,8 @@ async function refreshNetworkView() {
 
     status.files.forEach(f => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${f.file_name}</td><td>${f.file_size}</td><td>${f.status}</td><td>${f.primary_nodes.join(', ')}</td><td>${f.replica_nodes.join(', ')}</td>`;
+      const sizeMB = (f.file_size / (1024*1024)).toFixed(2);
+      tr.innerHTML = `<td>${f.file_name}</td><td>${sizeMB}</td><td>${f.status}</td><td>${f.primary_nodes.join(', ')}</td><td>${f.replica_nodes.join(', ')}</td>`;
       filesTbody.appendChild(tr);
     });
   } catch (e) {
